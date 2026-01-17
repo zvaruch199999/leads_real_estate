@@ -16,9 +16,6 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = "PASTE_YOUR_REAL_TOKEN"
-ADMIN_GROUP_ID = -1001234567890  # твоя група
-
 # ================= DB =================
 conn = sqlite3.connect("real_estate.db", check_same_thread=False)
 cursor = conn.cursor()
