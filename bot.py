@@ -1,98 +1,93 @@
-from telegram import *
-from telegram.ext import *
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 import sqlite3
-from datetime import datetime
 
 BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN"
 ADMIN_GROUP_ID = -1001234567890
 
 # ---------- DATABASE ----------
-
-conn = sqlite3.connect("requests.db", check_same_thread=False)
+conn = sqlite3.connect(":memory:", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS requests (
+CREATE TABLE requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
-    name TEXT,
-    phone TEXT,
-    city TEXT,
-    district TEXT,
-    deal TEXT,
-    property TEXT,
-    status TEXT,
-    created_at TEXT
+    status TEXT
 )
 """)
 conn.commit()
 
-# ---------- HELPERS ----------
+# ---------- COMMANDS ----------
 
-def save_request(u):
-    cursor.execute("""
-    INSERT INTO requests (user_id, name, phone, city, district, deal, property, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        u["user_id"], u["name"], u["phone"], u["city"],
-        u["district"], u["deal"], u["property"],
-        "🟡 В пошуках",
-        datetime.now().strftime("%Y-%m-%d %H:%M")
-    ))
-    conn.commit()
-    return cursor.lastrowid
-
-
-def update_status(req_id, status):
-    cursor.execute("UPDATE requests SET status=? WHERE id=?", (status, req_id))
-    conn.commit()
-
-
-def get_request_by_user(user_id):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cursor.execute(
-        "SELECT id, city, district, status FROM requests WHERE user_id=? ORDER BY id DESC LIMIT 1",
-        (user_id,)
+        "INSERT INTO requests (user_id, status) VALUES (?, ?)",
+        (update.effective_user.id, "🟡 В пошуках")
     )
-    return cursor.fetchone()
+    conn.commit()
+    req_id = cursor.lastrowid
 
-# ---------- START ----------
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔵 В роботу", callback_data=f"status_work_{req_id}")],
+        [InlineKeyboardButton("✅ Знайдено", callback_data=f"status_done_{req_id}")],
+        [InlineKeyboardButton("❌ Неактуально", callback_data=f"status_cancel_{req_id}")]
+    ])
 
-async def start(update: Update, ctx):
-    await update.message.reply_text("👋 Вітаємо! Бот працює стабільно ✅")
+    await update.message.reply_text(
+        f"📋 Запит №{req_id}\n🔄 Статус: 🟡 В пошуках",
+        reply_markup=keyboard
+    )
 
-# ---------- STATUS FOR CLIENT ----------
+    await context.bot.send_message(
+        ADMIN_GROUP_ID,
+        f"📥 Новий запит №{req_id}",
+        reply_markup=keyboard
+    )
 
-async def status_command(update: Update, ctx):
-    row = get_request_by_user(update.message.from_user.id)
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cursor.execute(
+        "SELECT id, status FROM requests WHERE user_id=? ORDER BY id DESC LIMIT 1",
+        (update.effective_user.id,)
+    )
+    row = cursor.fetchone()
 
     if not row:
         await update.message.reply_text("❌ У вас немає активних запитів.")
         return
 
-    req_id, city, district, status = row
     await update.message.reply_text(
-        f"📋 Запит №{req_id}\n"
-        f"📍 {city} / {district}\n\n"
-        f"🔄 Статус: {status}"
+        f"📋 Запит №{row[0]}\n🔄 Статус: {row[1]}"
     )
 
-# ---------- STATUS FROM GROUP ----------
+# ---------- CALLBACK ----------
 
-async def status_update_handler(update: Update, ctx):
+async def status_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     _, action, req_id = q.data.split("_")
-    req_id = int(req_id)
+    status_map = {
+        "work": "🔵 Опрацьовується",
+        "done": "✅ Житло знайдено",
+        "cancel": "❌ Неактуально"
+    }
 
-    if action == "work":
-        update_status(req_id, "🔵 Опрацьовується")
-    elif action == "done":
-        update_status(req_id, "✅ Житло знайдено")
-    else:
-        update_status(req_id, "❌ Неактуально")
+    new_status = status_map[action]
+    cursor.execute(
+        "UPDATE requests SET status=? WHERE id=?",
+        (new_status, int(req_id))
+    )
+    conn.commit()
 
-    await q.message.reply_text("✅ Статус оновлено")
+    await q.message.edit_text(
+        f"📋 Запит №{req_id}\n🔄 Статус: {new_status}"
+    )
 
 # ---------- MAIN ----------
 
@@ -100,8 +95,8 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CallbackQueryHandler(status_update_handler, pattern="^status_"))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CallbackQueryHandler(status_update, pattern="^status_"))
 
     app.run_polling()
 
