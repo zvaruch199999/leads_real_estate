@@ -80,6 +80,8 @@ async def parking(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users[uid]["parking"] = q.data.replace("parking_", "")
     users[uid]["step"] = "move_in"
+
+    # ❗ ВАЖЛИВО: одразу наступне питання
     await q.message.reply_text("Яка найкраща дата для вашого заїзду?")
 
 # ---------- VIEWING FORMAT ----------
@@ -106,27 +108,13 @@ async def viewing_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     users[uid]["phone"] = update.message.contact.phone_number
-
     users[uid]["step"] = "summary"
 
-    summary = (
-        "🔎 **Ваш запит:**\n\n"
-        f"Тип угоди: {users[uid]['deal_type']}\n"
-        f"Тип житла: {users[uid]['property_type']}\n"
-        f"Місто / район: {users[uid]['city']} / {users[uid]['district']}\n"
-        f"Для кого: {users[uid]['for_whom']}\n"
-        f"Діяльність: {users[uid]['occupation']}\n"
-        f"Діти: {users[uid]['children']}\n"
-        f"Паркування: {users[uid]['parking']}\n"
-        f"Дата заїзду: {users[uid]['move_in']}\n"
-        f"Бюджет: {users[uid]['budget']}\n"
-        f"Огляди: {users[uid]['viewing_time']}\n\n"
+    await update.message.reply_text(
         "Все вірно? Напишіть **Так** або **Ні**."
     )
 
-    await update.message.reply_text(summary)
-
-# ---------- TEXT HANDLER (ЄДИНИЙ) ----------
+# ---------- TEXT HANDLER ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     text = update.message.text
@@ -201,37 +189,20 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif step == "summary":
         if text.lower().startswith("так"):
-            users[uid]["step"] = "agreement"
-            await update.message.reply_text(
-                "ℹ️ Важливо:\n"
-                "• депозит = 1 місяць оренди\n"
-                "• комісія ріелтору\n"
-                "• при дітях можливий подвійний депозит\n\n"
-                "Погоджуєтесь? Напишіть **Так** або **Ні**."
-            )
-        else:
-            users.pop(uid)
-            await update.message.reply_text("Добре, запит скасовано.")
-
-    elif step == "agreement":
-        if text.lower().startswith("так"):
             await context.bot.send_message(
                 ADMIN_GROUP_ID,
-                f"📥 НОВИЙ ЗАПИТ\n\n"
+                f"📥 НОВИЙ ЗАПИТ\n"
                 f"👤 {users[uid]['username']}\n"
-                f"📞 {users[uid]['phone']}\n"
-                f"🏠 {users[uid]['deal_type']} | {users[uid]['property_type']}\n"
-                f"📍 {users[uid]['city']} / {users[uid]['district']}\n"
-                f"💰 {users[uid]['budget']}"
+                f"📞 {users[uid]['phone']}"
             )
             await update.message.reply_text(
                 "✅ Запит відправлено маклеру.\n"
                 "Ми звʼяжемося з вами протягом 24–48 годин."
             )
         else:
-            await update.message.reply_text("Добре, ми не будемо продовжувати роботу.")
+            await update.message.reply_text("Запит скасовано.")
 
-        users.pop(uid)
+        users.pop(uid, None)
 
 # ---------- MAIN ----------
 def main():
