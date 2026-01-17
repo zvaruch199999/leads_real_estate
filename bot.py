@@ -1,9 +1,30 @@
-from telegram import *
-from telegram.ext import *
-from config import BOT_TOKEN, ADMIN_GROUP_ID
-import storage
+import os
+import sqlite3
+from datetime import datetime
 
-users = {}
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+# ================== CONFIG ==================
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_GROUP_ID = -1001234567890  # <-- заміни на ID своєї групи
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN not set in environment variables")
 
 # ================== DATABASE ==================
 
@@ -43,18 +64,18 @@ users = {}
 PARKING_MAP = {
     "park_yes": "Так",
     "park_no": "Ні",
-    "park_later": "Пізніше"
+    "park_later": "Пізніше",
 }
 
 VIEW_MAP = {
     "view_online": "Онлайн",
     "view_offline": "Фізичний",
-    "view_both": "Обидва варіанти"
+    "view_both": "Обидва варіанти",
 }
 
 LOCATION_MAP = {
     "loc_ua": "Україна",
-    "loc_sk": "Словаччина"
+    "loc_sk": "Словаччина",
 }
 
 # ================== HELPERS ==================
@@ -75,52 +96,56 @@ def build_summary(u, req_id):
         f"📅 Заїзд: {u['move_in']}\n"
         f"💶 Бюджет: {u['budget']}\n"
         f"⏰ Огляди: {u['view_time']}\n"
-        f"🌍 Локація зараз: {u['location']}\n"
+        f"🌍 Зараз: {u['location']}\n"
         f"👀 Формат огляду: {u['view_format']}\n\n"
         f"🔄 **Статус:** {u['status']}"
     )
 
 def save_request(u):
-    cur.execute("""
-    INSERT INTO requests (
-        user_id, name, phone, deal, property, city, district,
-        for_whom, job, children, pets, parking, move_in,
-        budget, view_time, location, view_format, status, created_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
-        u["user_id"], u["name"], u["phone"], u["deal"], u["property"],
-        u["city"], u["district"], u["for_whom"], u["job"],
-        u["children"], u["pets"], u["parking"], u["move_in"],
-        u["budget"], u["view_time"], u["location"],
-        u["view_format"], u["status"],
-        datetime.now().strftime("%Y-%m-%d %H:%M")
-    ))
+    cur.execute(
+        """
+        INSERT INTO requests (
+            user_id, name, phone, deal, property, city, district,
+            for_whom, job, children, pets, parking, move_in,
+            budget, view_time, location, view_format, status, created_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            u["user_id"], u["name"], u["phone"], u["deal"], u["property"],
+            u["city"], u["district"], u["for_whom"], u["job"],
+            u["children"], u["pets"], u["parking"], u["move_in"],
+            u["budget"], u["view_time"], u["location"],
+            u["view_format"], u["status"],
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
+        ),
+    )
     conn.commit()
     return cur.lastrowid
 
 # ================== START ==================
 
-async def start(update: Update, ctx):
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     users[update.effective_user.id] = {
         "user_id": update.effective_user.id,
-        "step": "deal"
+        "step": "deal",
     }
 
     kb = [
         [InlineKeyboardButton("🏠 Оренда", callback_data="deal_rent")],
-        [InlineKeyboardButton("🏡 Купівля", callback_data="deal_buy")]
+        [InlineKeyboardButton("🏡 Купівля", callback_data="deal_buy")],
     ]
     await update.message.reply_text(
         "👋 Вітаємо!\nЩо вас цікавить?",
-        reply_markup=InlineKeyboardMarkup(kb)
+        reply_markup=InlineKeyboardMarkup(kb),
     )
 
 # ================== CALLBACKS ==================
 
-async def deal_handler(update: Update, ctx):
+async def deal_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
+
     u["deal"] = "Оренда" if q.data == "deal_rent" else "Купівля"
     u["step"] = "property"
 
@@ -130,11 +155,14 @@ async def deal_handler(update: Update, ctx):
         [InlineKeyboardButton("2-кімнатна", callback_data="prop_2")],
         [InlineKeyboardButton("3-кімнатна", callback_data="prop_3")],
         [InlineKeyboardButton("Будинок", callback_data="prop_Будинок")],
-        [InlineKeyboardButton("✍️ Свій варіант", callback_data="prop_custom")]
+        [InlineKeyboardButton("✍️ Свій варіант", callback_data="prop_custom")],
     ]
-    await q.message.reply_text("🏡 Тип житла?", reply_markup=InlineKeyboardMarkup(kb))
+    await q.message.reply_text(
+        "🏡 Який тип житла?",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
-async def property_handler(update: Update, ctx):
+async def property_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
@@ -147,14 +175,15 @@ async def property_handler(update: Update, ctx):
         u["step"] = "city"
         await q.message.reply_text("📍 В якому місті шукаєте житло?")
 
-async def text_handler(update: Update, ctx):
+# ================== TEXT FLOW ==================
+
+async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     if uid not in users:
         return
 
     u = users[uid]
     t = update.message.text
-
     step = u["step"]
 
     if step == "property_text":
@@ -187,7 +216,7 @@ async def text_handler(update: Update, ctx):
         u["step"] = "pets"
         await update.message.reply_text(
             "🐾 Чи маєте тваринок?\n"
-            "Якщо так — напишіть яку і трохи про неї.\n"
+            "Якщо так — напишіть яку і коротко про неї.\n"
             "Якщо ні — напишіть «Ні»."
         )
 
@@ -197,9 +226,12 @@ async def text_handler(update: Update, ctx):
         kb = [
             [InlineKeyboardButton("Так", callback_data="park_yes")],
             [InlineKeyboardButton("Ні", callback_data="park_no")],
-            [InlineKeyboardButton("Пізніше", callback_data="park_later")]
+            [InlineKeyboardButton("Пізніше", callback_data="park_later")],
         ]
-        await update.message.reply_text("🚗 Чи потрібне паркування?", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text(
+            "🚗 Чи потрібне паркування?",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
 
     elif step == "move_in":
         u["move_in"] = t
@@ -217,9 +249,12 @@ async def text_handler(update: Update, ctx):
         kb = [
             [InlineKeyboardButton("🇺🇦 В Україні", callback_data="loc_ua")],
             [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="loc_sk")],
-            [InlineKeyboardButton("✍️ Інша країна", callback_data="loc_custom")]
+            [InlineKeyboardButton("✍️ Інша країна", callback_data="loc_custom")],
         ]
-        await update.message.reply_text("🌍 Де ви зараз знаходитесь?", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text(
+            "🌍 Де ви зараз знаходитесь?",
+            reply_markup=InlineKeyboardMarkup(kb),
+        )
 
     elif step == "custom_location":
         u["location"] = t
@@ -234,25 +269,27 @@ async def text_handler(update: Update, ctx):
         kb = [
             [InlineKeyboardButton("🔵 В роботу", callback_data=f"status_work_{req_id}")],
             [InlineKeyboardButton("✅ Знайдено", callback_data=f"status_done_{req_id}")],
-            [InlineKeyboardButton("❌ Неактуально", callback_data=f"status_cancel_{req_id}")]
+            [InlineKeyboardButton("❌ Неактуально", callback_data=f"status_cancel_{req_id}")],
         ]
 
         await ctx.bot.send_message(
             ADMIN_GROUP_ID,
             build_summary(u, req_id),
             reply_markup=InlineKeyboardMarkup(kb),
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
 
         await update.message.reply_text(
             "✅ Запит відправлено маклеру.\n"
             "Ми звʼяжемось з вами протягом **24–48 годин**.",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
         )
 
         users.pop(uid)
 
-async def parking_handler(update: Update, ctx):
+# ================== PARKING / LOCATION / VIEW ==================
+
+async def parking_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
@@ -260,7 +297,7 @@ async def parking_handler(update: Update, ctx):
     u["step"] = "move_in"
     await q.message.reply_text("📅 Коли плануєте заїзд?")
 
-async def location_handler(update: Update, ctx):
+async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
@@ -277,11 +314,14 @@ async def ask_view_format(msg):
     kb = [
         [InlineKeyboardButton("💻 Онлайн", callback_data="view_online")],
         [InlineKeyboardButton("🚶 Фізичний", callback_data="view_offline")],
-        [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view_both")]
+        [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view_both")],
     ]
-    await msg.reply_text("👀 Формат огляду?", reply_markup=InlineKeyboardMarkup(kb))
+    await msg.reply_text(
+        "👀 Який формат огляду вам підходить?",
+        reply_markup=InlineKeyboardMarkup(kb),
+    )
 
-async def view_handler(update: Update, ctx):
+async def view_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
@@ -291,11 +331,13 @@ async def view_handler(update: Update, ctx):
     kb = ReplyKeyboardMarkup(
         [[KeyboardButton("📞 Поділитись контактом", request_contact=True)]],
         resize_keyboard=True,
-        one_time_keyboard=True
+        one_time_keyboard=True,
     )
     await q.message.reply_text("📞 Поділіться контактом:", reply_markup=kb)
 
-async def contact_handler(update: Update, ctx):
+# ================== CONTACT ==================
+
+async def contact_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = users[update.message.from_user.id]
     u["phone"] = update.message.contact.phone_number
     u["step"] = "name"
@@ -303,13 +345,16 @@ async def contact_handler(update: Update, ctx):
 
 # ================== STATUS ==================
 
-async def status_command(update: Update, ctx):
-    cur.execute("""
-    SELECT id, city, district, status
-    FROM requests
-    WHERE user_id=?
-    ORDER BY id DESC LIMIT 1
-    """, (update.effective_user.id,))
+async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    cur.execute(
+        """
+        SELECT id, city, district, status
+        FROM requests
+        WHERE user_id=?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (update.effective_user.id,),
+    )
     row = cur.fetchone()
 
     if not row:
@@ -322,7 +367,7 @@ async def status_command(update: Update, ctx):
         f"🔄 Статус: {row[3]}"
     )
 
-async def status_update_handler(update: Update, ctx):
+async def status_update_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
@@ -330,12 +375,12 @@ async def status_update_handler(update: Update, ctx):
     status_map = {
         "work": "🔵 Опрацьовується",
         "done": "✅ Житло знайдено",
-        "cancel": "❌ Неактуально"
+        "cancel": "❌ Неактуально",
     }
 
     cur.execute(
         "UPDATE requests SET status=? WHERE id=?",
-        (status_map[action], int(req_id))
+        (status_map[action], int(req_id)),
     )
     conn.commit()
 
