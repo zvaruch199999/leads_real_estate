@@ -17,18 +17,18 @@ from config import BOT_TOKEN, ADMIN_GROUP_ID
 
 users = {}
 
-# ---------- START ----------
+# ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("🏠 Оренда", callback_data="rent")],
-        [InlineKeyboardButton("🏡 Купівля", callback_data="buy")]
+        [InlineKeyboardButton("🏠 Оренда", callback_data="deal_rent")],
+        [InlineKeyboardButton("🏡 Купівля", callback_data="deal_buy")]
     ]
     await update.message.reply_text(
-        "Привіт! 👋\nВи шукаєте житло:",
+        "Привіт 👋\nВи шукаєте житло:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ---------- DEAL TYPE ----------
+# ---------------- DEAL TYPE ----------------
 async def deal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -36,7 +36,7 @@ async def deal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users[uid] = {
         "username": f"@{q.from_user.username}" if q.from_user.username else "немає",
-        "deal_type": "Оренда" if q.data == "rent" else "Купівля",
+        "deal_type": "Оренда" if q.data == "deal_rent" else "Купівля",
         "step": "property_type"
     }
 
@@ -58,7 +58,7 @@ async def deal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ---------- PROPERTY TYPE ----------
+# ---------------- PROPERTY TYPE ----------------
 async def property_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -72,8 +72,26 @@ async def property_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users[uid]["step"] = "city"
         await q.message.reply_text("В якому місті шукаєте житло?")
 
-# ---------- PARKING ----------
-async def parking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------- PETS ----------------
+async def pets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    uid = q.from_user.id
+
+    if q.data == "pets_yes":
+        users[uid]["pets"] = "Так"
+        users[uid]["step"] = "pets_details"
+        await q.message.reply_text(
+            "Розпишіть, будь ласка, тваринку(и):\n"
+            "(вид, кількість, розмір)"
+        )
+    else:
+        users[uid]["pets"] = "Ні"
+        users[uid]["step"] = "parking"
+        await ask_parking(q.message)
+
+# ---------------- PARKING ----------------
+async def parking_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     uid = q.from_user.id
@@ -82,7 +100,18 @@ async def parking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users[uid]["step"] = "move_in"
     await q.message.reply_text("Яка найкраща дата для вашого заїзду?")
 
-# ---------- VIEWING FORMAT ----------
+async def ask_parking(message):
+    keyboard = [
+        [InlineKeyboardButton("Так", callback_data="parking_Так")],
+        [InlineKeyboardButton("Ні", callback_data="parking_Ні")],
+        [InlineKeyboardButton("Пізніше", callback_data="parking_Пізніше")]
+    ]
+    await message.reply_text(
+        "Чи потрібне паркування?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ---------------- VIEWING FORMAT ----------------
 async def viewing_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -96,22 +125,24 @@ async def viewing_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resize_keyboard=True,
         one_time_keyboard=True
     )
+
     await q.message.reply_text(
         "Поділіться контактом для звʼязку:",
         reply_markup=keyboard
     )
 
-# ---------- CONTACT ----------
+# ---------------- CONTACT ----------------
 async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     users[uid]["phone"] = update.message.contact.phone_number
-    users[uid]["step"] = "summary"
+    users[uid]["step"] = "confirm_data"
 
     await update.message.reply_text(
-        "Все вірно? Напишіть **Так** або **Ні**."
+        build_summary(users[uid]) +
+        "\n\nВсе вірно?\nНапишіть **Так** або **Ні**."
     )
 
-# ---------- TEXT HANDLER ----------
+# ---------------- TEXT FLOW ----------------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     text = update.message.text
@@ -145,21 +176,27 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users[uid]["occupation"] = text
         users[uid]["step"] = "children"
         await update.message.reply_text(
-            "Чи маєте дітей?\nЯкщо так — напишіть вік та стать.\nЯкщо ні — напишіть «Ні»."
+            "Чи маєте дітей?\n"
+            "Якщо так — напишіть вік та стать.\n"
+            "Якщо ні — напишіть «Ні»."
         )
 
     elif step == "children":
         users[uid]["children"] = text
-        users[uid]["step"] = "parking"
+        users[uid]["step"] = "pets"
         keyboard = [
-            [InlineKeyboardButton("Так", callback_data="parking_yes")],
-            [InlineKeyboardButton("Ні", callback_data="parking_no")],
-            [InlineKeyboardButton("Пізніше", callback_data="parking_later")]
+            [InlineKeyboardButton("Так", callback_data="pets_yes")],
+            [InlineKeyboardButton("Ні", callback_data="pets_no")]
         ]
         await update.message.reply_text(
-            "Чи потрібне паркування?",
+            "Чи маєте тваринок?",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+    elif step == "pets_details":
+        users[uid]["pets_details"] = text
+        users[uid]["step"] = "parking"
+        await ask_parking(update.message)
 
     elif step == "move_in":
         users[uid]["move_in"] = text
@@ -173,42 +210,99 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif step == "viewing_time":
         users[uid]["viewing_time"] = text
-        users[uid]["step"] = "viewing_format"
+        users[uid]["step"] = "location"
         keyboard = [
-            [InlineKeyboardButton("💻 Онлайн", callback_data="online")],
-            [InlineKeyboardButton("🚶 Фізичний", callback_data="offline")],
-            [InlineKeyboardButton("🔁 Обидва", callback_data="both")]
+            [InlineKeyboardButton("🇺🇦 В Україні", callback_data="loc_Україна")],
+            [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="loc_Словаччина")],
+            [InlineKeyboardButton("✍️ Інша країна", callback_data="loc_custom")]
         ]
         await update.message.reply_text(
-            "Який формат огляду вам підходить?",
+            "Де ви зараз знаходитесь?",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
-    elif step == "summary":
+    elif step == "custom_location":
+        users[uid]["current_location"] = text
+        users[uid]["step"] = "viewing_format"
+        await ask_viewing_format(update.message)
+
+    elif step == "confirm_data":
+        if text.lower().startswith("так"):
+            users[uid]["step"] = "confirm_terms"
+            await update.message.reply_text(
+                "ℹ️ Важливо:\n\n"
+                "• при оренді оплачується депозит (зазвичай = орендній платі)\n"
+                "• комісія ріелтору — повна або часткова\n"
+                "• при дітях або тваринках можливий подвійний депозит\n\n"
+                "Чи погоджуєтесь з цими умовами?\n"
+                "Напишіть **Так** або **Ні**."
+            )
+        else:
+            await update.message.reply_text("Добре, ви можете почати заново /start")
+            users.pop(uid, None)
+
+    elif step == "confirm_terms":
         if text.lower().startswith("так"):
             await context.bot.send_message(
                 ADMIN_GROUP_ID,
-                f"📥 НОВИЙ ЗАПИТ\n"
-                f"👤 {users[uid]['username']}\n"
-                f"📞 {users[uid]['phone']}"
+                build_admin_message(users[uid])
             )
             await update.message.reply_text(
                 "✅ Запит відправлено маклеру.\n"
-                "Ми звʼяжемося з вами протягом 24–48 годин."
+                "Ми звʼяжемося з вами протягом **24–48 годин**, "
+                "щоб запропонувати відповідні варіанти."
             )
         else:
-            await update.message.reply_text("Запит скасовано.")
+            await update.message.reply_text("Добре, без підтвердження ми не можемо працювати.")
         users.pop(uid, None)
 
-# ---------- MAIN ----------
+# ---------------- HELPERS ----------------
+async def ask_viewing_format(message):
+    keyboard = [
+        [InlineKeyboardButton("💻 Онлайн", callback_data="view_online")],
+        [InlineKeyboardButton("🚶 Фізичний", callback_data="view_physical")],
+        [InlineKeyboardButton("🔁 Обидва", callback_data="view_both")]
+    ]
+    await message.reply_text(
+        "Який формат огляду вам підходить?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+def build_summary(u):
+    return (
+        "🔎 **Ваш запит:**\n\n"
+        f"Тип угоди: {u['deal_type']}\n"
+        f"Житло: {u['property_type']}\n"
+        f"Місто: {u.get('city','')}\n"
+        f"Район: {u.get('district','')}\n"
+        f"Для кого: {u.get('for_whom','')}\n"
+        f"Діяльність: {u.get('occupation','')}\n"
+        f"Діти: {u.get('children','')}\n"
+        f"Тварини: {u.get('pets','')} {u.get('pets_details','')}\n"
+        f"Паркування: {u.get('parking','')}\n"
+        f"Заїзд: {u.get('move_in','')}\n"
+        f"Бюджет: {u.get('budget','')}\n"
+        f"Огляди: {u.get('viewing_time','')}\n"
+    )
+
+def build_admin_message(u):
+    return (
+        "📥 НОВИЙ ЗАПИТ\n\n" +
+        build_summary(u) +
+        f"\nКонтакт: {u['phone']}\n"
+        f"Username: {u['username']}"
+    )
+
+# ---------------- MAIN ----------------
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(deal_type, pattern="^(rent|buy)$"))
+    app.add_handler(CallbackQueryHandler(deal_type, pattern="^deal_"))
     app.add_handler(CallbackQueryHandler(property_type, pattern="^type_"))
-    app.add_handler(CallbackQueryHandler(parking, pattern="^parking_"))
-    app.add_handler(CallbackQueryHandler(viewing_format, pattern="^(online|offline|both)$"))
+    app.add_handler(CallbackQueryHandler(pets_handler, pattern="^pets_"))
+    app.add_handler(CallbackQueryHandler(parking_handler, pattern="^parking_"))
+    app.add_handler(CallbackQueryHandler(viewing_format, pattern="^view_"))
     app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
