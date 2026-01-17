@@ -17,7 +17,6 @@ from config import BOT_TOKEN, ADMIN_GROUP_ID
 
 users = {}
 
-
 # ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -28,7 +27,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Привіт! 👋\nВи шукаєте житло:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
 
 # ---------- DEAL TYPE ----------
 async def deal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -60,7 +58,6 @@ async def deal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
 # ---------- PROPERTY TYPE ----------
 async def property_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -75,8 +72,87 @@ async def property_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users[uid]["step"] = "city"
         await query.message.reply_text("В якому місті шукаєте житло?")
 
+# ---------- PARKING ----------
+async def parking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
 
-# ---------- TEXT HANDLER ----------
+    users[uid]["parking"] = query.data.replace("parking_", "")
+    users[uid]["step"] = "move_in"
+    await query.message.reply_text("Яка найкраща дата для вашого заїзду?")
+
+# ---------- COUNTRY ----------
+async def country(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+
+    if query.data == "OTHER":
+        users[uid]["step"] = "custom_country"
+        await query.message.reply_text("Вкажіть країну:")
+    else:
+        users[uid]["country"] = "Україна" if query.data == "UA" else "Словаччина"
+        await ask_viewing_format(query.message)
+
+# ---------- VIEWING FORMAT ----------
+async def ask_viewing_format(message):
+    keyboard = [
+        [InlineKeyboardButton("💻 Онлайн", callback_data="online")],
+        [InlineKeyboardButton("🚶 Фізичний", callback_data="offline")],
+        [InlineKeyboardButton("🔁 Обидва", callback_data="both")]
+    ]
+    await message.reply_text(
+        "Який формат огляду вам підходить?",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def viewing_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+
+    users[uid]["viewing_format"] = query.data
+    users[uid]["step"] = "contact"
+
+    keyboard = ReplyKeyboardMarkup(
+        [[KeyboardButton("📞 Поділитись контактом", request_contact=True)]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+    await query.message.reply_text(
+        "Поділіться контактом для звʼязку:",
+        reply_markup=keyboard
+    )
+
+# ---------- CONTACT ----------
+async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.message.from_user.id
+    users[uid]["phone"] = update.message.contact.phone_number
+
+    users[uid]["step"] = "summary"
+
+    summary = (
+        "🔎 **Ваш запит:**\n\n"
+        f"Тип угоди: {users[uid]['deal_type']}\n"
+        f"Тип житла: {users[uid]['property_type']}\n"
+        f"Місто / район: {users[uid]['city']} / {users[uid]['district']}\n"
+        f"Для кого: {users[uid]['for_whom']}\n"
+        f"Діяльність: {users[uid]['occupation']}\n"
+        f"Діти: {users[uid]['children']}\n"
+        f"Паркування: {users[uid]['parking']}\n"
+        f"Дата заїзду: {users[uid]['move_in']}\n"
+        f"Бюджет: {users[uid]['budget']}\n"
+        f"Огляди: {users[uid]['viewing_time']}\n"
+        f"Країна: {users[uid]['country']}\n"
+        f"Формат огляду: {users[uid]['viewing_format']}\n\n"
+        "Все вірно? Напишіть **Так** або **Ні**."
+    )
+
+    await update.message.reply_text(summary)
+
+# ---------- TEXT HANDLER (ЄДИНИЙ!) ----------
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.message.from_user.id
     text = update.message.text
@@ -134,13 +210,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif step == "budget":
         users[uid]["budget"] = text
         users[uid]["step"] = "viewing_time"
-        await update.message.reply_text(
-            "Як зазвичай ви доступні для оглядів?\n(дні / час)"
-        )
+        await update.message.reply_text("Як зазвичай ви доступні для оглядів?")
 
     elif step == "viewing_time":
         users[uid]["viewing_time"] = text
-        users[uid]["step"] = "location_country"
+        users[uid]["step"] = "country"
         keyboard = [
             [InlineKeyboardButton("🇺🇦 В Україні", callback_data="UA")],
             [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="SK")],
@@ -153,140 +227,41 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif step == "custom_country":
         users[uid]["country"] = text
-        await ask_viewing_format(update)
+        await ask_viewing_format(update.message)
 
-    elif step == "summary_confirm":
+    elif step == "summary":
         if text.lower().startswith("так"):
-            await ask_agreement(update, context)
+            users[uid]["step"] = "agreement"
+            await update.message.reply_text(
+                "ℹ️ Важливо:\n\n"
+                "• депозит = 1 місяць оренди\n"
+                "• комісія ріелтору (повна або часткова)\n"
+                "• при дітях/тваринах можливий подвійний депозит\n\n"
+                "Погоджуєтесь? Напишіть **Так** або **Ні**."
+            )
         else:
-            users[uid]["step"] = "city"
-            await update.message.reply_text("Добре, почнемо знову.\nВ якому місті шукаєте житло?")
+            users.pop(uid, None)
+            await update.message.reply_text("Добре, запит скасовано.")
 
+    elif step == "agreement":
+        if text.lower().startswith("так"):
+            await context.bot.send_message(
+                ADMIN_GROUP_ID,
+                f"📥 НОВИЙ ЗАПИТ\n\n"
+                f"👤 {users[uid]['username']}\n"
+                f"📞 {users[uid]['phone']}\n"
+                f"🏠 {users[uid]['deal_type']} | {users[uid]['property_type']}\n"
+                f"📍 {users[uid]['city']} / {users[uid]['district']}\n"
+                f"💰 {users[uid]['budget']}"
+            )
+            await update.message.reply_text(
+                "✅ Запит відправлено маклеру.\n"
+                "Ми звʼяжемося з вами протягом 24–48 годин."
+            )
+        else:
+            await update.message.reply_text("Добре, ми не будемо продовжувати роботу.")
 
-# ---------- PARKING ----------
-async def parking(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-
-    users[uid]["parking"] = query.data.replace("parking_", "")
-    users[uid]["step"] = "move_in"
-    await query.message.reply_text("Яка найкраща дата для вашого заїзду?")
-
-
-# ---------- COUNTRY ----------
-async def country(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-
-    if query.data == "OTHER":
-        users[uid]["step"] = "custom_country"
-        await query.message.reply_text("Вкажіть країну:")
-    else:
-        users[uid]["country"] = "Україна" if query.data == "UA" else "Словаччина"
-        await ask_viewing_format(query.message)
-
-
-# ---------- VIEWING FORMAT ----------
-async def ask_viewing_format(message):
-    keyboard = [
-        [InlineKeyboardButton("💻 Онлайн", callback_data="online")],
-        [InlineKeyboardButton("🚶 Фізичний", callback_data="offline")],
-        [InlineKeyboardButton("🔁 Обидва", callback_data="both")]
-    ]
-    await message.reply_text(
-        "Який формат огляду вам підходить?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-async def viewing_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    uid = query.from_user.id
-
-    users[uid]["viewing_format"] = query.data
-    users[uid]["step"] = "contact"
-
-    keyboard = ReplyKeyboardMarkup(
-        [[KeyboardButton("📞 Поділитись контактом", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-
-    await query.message.reply_text(
-        "Поділіться контактом для звʼязку:",
-        reply_markup=keyboard
-    )
-
-
-# ---------- CONTACT ----------
-async def contact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    users[uid]["phone"] = update.message.contact.phone_number
-
-    summary = (
-        f"🔎 **Ваш запит:**\n\n"
-        f"Тип угоди: {users[uid]['deal_type']}\n"
-        f"Тип житла: {users[uid]['property_type']}\n"
-        f"Місто / район: {users[uid]['city']} / {users[uid]['district']}\n"
-        f"Для кого: {users[uid]['for_whom']}\n"
-        f"Діяльність: {users[uid]['occupation']}\n"
-        f"Діти: {users[uid]['children']}\n"
-        f"Паркування: {users[uid]['parking']}\n"
-        f"Дата заїзду: {users[uid]['move_in']}\n"
-        f"Бюджет: {users[uid]['budget']}\n"
-        f"Огляди: {users[uid]['viewing_time']}\n"
-        f"Країна: {users[uid]['country']}\n"
-        f"Формат огляду: {users[uid]['viewing_format']}\n\n"
-        "Все вірно? Напишіть **Так** або **Ні**."
-    )
-
-    users[uid]["step"] = "summary_confirm"
-    await update.message.reply_text(summary)
-
-
-# ---------- AGREEMENT ----------
-async def ask_agreement(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-
-    text = (
-        "ℹ️ Важливо:\n\n"
-        "У випадку оренди:\n"
-        "• депозит = 1 місяць оренди\n"
-        "• комісія ріелтору (повна або часткова)\n"
-        "• при наявності дітей або тварин можливий подвійний депозит\n\n"
-        "Чи погоджуєтесь ви з цими умовами і чи можемо працювати далі?\n"
-        "Напишіть **Так** або **Ні**."
-    )
-
-    users[uid]["step"] = "agreement"
-    await update.message.reply_text(text)
-
-
-async def agreement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.message.from_user.id
-    if update.message.text.lower().startswith("так"):
-        text = (
-            "📥 **НОВИЙ ЗАПИТ**\n\n"
-            f"👤 {users[uid]['username']}\n"
-            f"📞 {users[uid]['phone']}\n"
-            f"🏠 {users[uid]['deal_type']} | {users[uid]['property_type']}\n"
-            f"📍 {users[uid]['city']} / {users[uid]['district']}\n"
-            f"💰 {users[uid]['budget']}"
-        )
-
-        await context.bot.send_message(ADMIN_GROUP_ID, text)
-        await update.message.reply_text(
-            "✅ Запит відправлено маклеру.\n"
-            "Ми звʼяжемося з вами протягом 24–48 годин."
-        )
         users.pop(uid, None)
-    else:
-        await update.message.reply_text("Добре, ми не будемо продовжувати роботу.")
-        users.pop(uid, None)
-
 
 # ---------- MAIN ----------
 def main():
@@ -299,11 +274,9 @@ def main():
     app.add_handler(CallbackQueryHandler(country, pattern="^(UA|SK|OTHER)$"))
     app.add_handler(CallbackQueryHandler(viewing_format, pattern="^(online|offline|both)$"))
     app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, agreement_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
