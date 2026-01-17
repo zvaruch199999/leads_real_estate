@@ -41,16 +41,16 @@ async def deal_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     keyboard = [
-        [InlineKeyboardButton("Ліжко-місце", callback_data="Ліжко-місце")],
-        [InlineKeyboardButton("Кімната", callback_data="Кімната")],
-        [InlineKeyboardButton("Студія", callback_data="Студія")],
-        [InlineKeyboardButton("1-кімнатна", callback_data="1-кімнатна")],
-        [InlineKeyboardButton("2-кімнатна", callback_data="2-кімнатна")],
-        [InlineKeyboardButton("3-кімнатна", callback_data="3-кімнатна")],
-        [InlineKeyboardButton("4-кімнатна", callback_data="4-кімнатна")],
-        [InlineKeyboardButton("5-кімнатна", callback_data="5-кімнатна")],
-        [InlineKeyboardButton("Будинок", callback_data="Будинок")],
-        [InlineKeyboardButton("✍️ Свій варіант", callback_data="custom")]
+        [InlineKeyboardButton("Ліжко-місце", callback_data="type_Ліжко-місце")],
+        [InlineKeyboardButton("Кімната", callback_data="type_Кімната")],
+        [InlineKeyboardButton("Студія", callback_data="type_Студія")],
+        [InlineKeyboardButton("1-кімнатна", callback_data="type_1-кімнатна")],
+        [InlineKeyboardButton("2-кімнатна", callback_data="type_2-кімнатна")],
+        [InlineKeyboardButton("3-кімнатна", callback_data="type_3-кімнатна")],
+        [InlineKeyboardButton("4-кімнатна", callback_data="type_4-кімнатна")],
+        [InlineKeyboardButton("5-кімнатна", callback_data="type_5-кімнатна")],
+        [InlineKeyboardButton("Будинок", callback_data="type_Будинок")],
+        [InlineKeyboardButton("✍️ Свій варіант", callback_data="type_custom")]
     ]
 
     await q.message.reply_text(
@@ -64,11 +64,11 @@ async def property_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     uid = q.from_user.id
 
-    if q.data == "custom":
+    if q.data == "type_custom":
         users[uid]["step"] = "custom_property"
         await q.message.reply_text("Опишіть тип житла:")
     else:
-        users[uid]["property_type"] = q.data
+        users[uid]["property_type"] = q.data.replace("type_", "")
         users[uid]["step"] = "city"
         await q.message.reply_text("В якому місті шукаєте житло?")
 
@@ -80,8 +80,6 @@ async def parking(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     users[uid]["parking"] = q.data.replace("parking_", "")
     users[uid]["step"] = "move_in"
-
-    # ❗ ВАЖЛИВО: одразу наступне питання
     await q.message.reply_text("Яка найкраща дата для вашого заїзду?")
 
 # ---------- VIEWING FORMAT ----------
@@ -98,7 +96,6 @@ async def viewing_format(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-
     await q.message.reply_text(
         "Поділіться контактом для звʼязку:",
         reply_markup=keyboard
@@ -201,7 +198,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             await update.message.reply_text("Запит скасовано.")
-
         users.pop(uid, None)
 
 # ---------- MAIN ----------
@@ -210,7 +206,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(deal_type, pattern="^(rent|buy)$"))
-    app.add_handler(CallbackQueryHandler(property_type))
+    app.add_handler(CallbackQueryHandler(property_type, pattern="^type_"))
     app.add_handler(CallbackQueryHandler(parking, pattern="^parking_"))
     app.add_handler(CallbackQueryHandler(viewing_format, pattern="^(online|offline|both)$"))
     app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
