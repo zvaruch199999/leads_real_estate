@@ -7,6 +7,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
     KeyboardButton,
 )
 from telegram.ext import (
@@ -21,10 +22,10 @@ from telegram.ext import (
 # ================== CONFIG ==================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_GROUP_ID = -1001234567890  # <-- заміни на ID своєї групи
+ADMIN_GROUP_ID = -5205464005  # 🔴 ЗАМІНИ НА ID СВОЄЇ ГРУПИ
 
 if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN not set in environment variables")
+    raise RuntimeError("BOT_TOKEN not set")
 
 # ================== DATABASE ==================
 
@@ -102,23 +103,20 @@ def build_summary(u, req_id):
     )
 
 def save_request(u):
-    cur.execute(
-        """
-        INSERT INTO requests (
-            user_id, name, phone, deal, property, city, district,
-            for_whom, job, children, pets, parking, move_in,
-            budget, view_time, location, view_format, status, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            u["user_id"], u["name"], u["phone"], u["deal"], u["property"],
-            u["city"], u["district"], u["for_whom"], u["job"],
-            u["children"], u["pets"], u["parking"], u["move_in"],
-            u["budget"], u["view_time"], u["location"],
-            u["view_format"], u["status"],
-            datetime.now().strftime("%Y-%m-%d %H:%M"),
-        ),
-    )
+    cur.execute("""
+    INSERT INTO requests (
+        user_id, name, phone, deal, property, city, district,
+        for_whom, job, children, pets, parking, move_in,
+        budget, view_time, location, view_format, status, created_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (
+        u["user_id"], u["name"], u["phone"], u["deal"], u["property"],
+        u["city"], u["district"], u["for_whom"], u["job"],
+        u["children"], u["pets"], u["parking"], u["move_in"],
+        u["budget"], u["view_time"], u["location"],
+        u["view_format"], u["status"],
+        datetime.now().strftime("%Y-%m-%d %H:%M"),
+    ))
     conn.commit()
     return cur.lastrowid
 
@@ -264,6 +262,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif step == "name":
         u["name"] = t
         u["status"] = "🟡 В пошуках"
+
         req_id = save_request(u)
 
         kb = [
@@ -280,12 +279,13 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
 
         await update.message.reply_text(
-            "✅ Запит відправлено маклеру.\n"
+            "✅ Запит прийнято!\n"
             "Ми звʼяжемось з вами протягом **24–48 годин**.",
             parse_mode="Markdown",
         )
 
-        users.pop(uid)
+        users.pop(uid, None)
+        return
 
 # ================== PARKING / LOCATION / VIEW ==================
 
@@ -341,20 +341,21 @@ async def contact_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u = users[update.message.from_user.id]
     u["phone"] = update.message.contact.phone_number
     u["step"] = "name"
-    await update.message.reply_text("👤 Як до вас можемо звертатись?")
+
+    await update.message.reply_text(
+        "👤 Як до вас можемо звертатись?",
+        reply_markup=ReplyKeyboardRemove(),  # 🔴 КРИТИЧНО
+    )
 
 # ================== STATUS ==================
 
 async def status_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    cur.execute(
-        """
+    cur.execute("""
         SELECT id, city, district, status
         FROM requests
         WHERE user_id=?
         ORDER BY id DESC LIMIT 1
-        """,
-        (update.effective_user.id,),
-    )
+    """, (update.effective_user.id,))
     row = cur.fetchone()
 
     if not row:
