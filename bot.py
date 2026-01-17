@@ -1,10 +1,9 @@
 from telegram import *
 from telegram.ext import *
-import sqlite3
-from datetime import datetime
+from config import BOT_TOKEN, ADMIN_GROUP_ID
+import storage
 
-BOT_TOKEN = "PASTE_YOUR_BOT_TOKEN"
-ADMIN_GROUP_ID = -1001234567890  # ID групи маклерів
+users = {}
 
 # ================== DATABASE ==================
 
