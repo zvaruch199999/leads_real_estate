@@ -8,7 +8,7 @@ from telegram import (
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    ReplyKeyboardRemove,
+    ReplyKeyboardRemove
 )
 from telegram.ext import (
     ApplicationBuilder,
@@ -16,23 +16,15 @@ from telegram.ext import (
     CallbackQueryHandler,
     MessageHandler,
     ContextTypes,
-    filters,
+    filters
 )
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_GROUP_ID = os.getenv("ADMIN_GROUP_ID")
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
 
-# ❗ захист, але без падіння в циклі деплою
-if not BOT_TOKEN:
-    print("❌ BOT_TOKEN не заданий")
-    BOT_TOKEN = "PASTE_YOUR_TOKEN_HERE"  # ⛔ тимчасово для тесту
-
-if not ADMIN_GROUP_ID:
-    print("❌ ADMIN_GROUP_ID не заданий")
-    ADMIN_GROUP_ID = "-1000000000000"  # ⛔ заміни на реальний
-
-ADMIN_GROUP_ID = int(ADMIN_GROUP_ID)
+if not BOT_TOKEN or ADMIN_GROUP_ID == 0:
+    raise RuntimeError("BOT_TOKEN або ADMIN_GROUP_ID не задані")
 
 # ================= DB =================
 conn = sqlite3.connect("real_estate.db", check_same_thread=False)
@@ -110,12 +102,12 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reset_user(update.effective_user.id)
     users[update.effective_user.id] = {
         "step": "deal",
-        "username": update.effective_user.username or "",
+        "username": update.effective_user.username or ""
     }
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🏠 Оренда", callback_data="deal:rent")],
-        [InlineKeyboardButton("🏡 Купівля", callback_data="deal:buy")],
+        [InlineKeyboardButton("🏡 Купівля", callback_data="deal:buy")]
     ])
     await update.message.reply_text("👋 Що вас цікавить?", reply_markup=kb)
 
@@ -135,7 +127,7 @@ async def deal_handler(update: Update, ctx):
         [InlineKeyboardButton("2️⃣ 2-кімнатна", callback_data="prop:2-кімнатна")],
         [InlineKeyboardButton("3️⃣ 3-кімнатна", callback_data="prop:3-кімнатна")],
         [InlineKeyboardButton("🏡 Будинок", callback_data="prop:Будинок")],
-        [InlineKeyboardButton("✍️ Свій варіант", callback_data="prop:custom")],
+        [InlineKeyboardButton("✍️ Свій варіант", callback_data="prop:custom")]
     ])
     await q.message.reply_text("🏡 Тип житла:", reply_markup=kb)
 
@@ -145,12 +137,12 @@ async def property_handler(update: Update, ctx):
     await q.answer()
     u = users[q.from_user.id]
 
-    value = q.data.split(":")[1]
-    if value == "custom":
+    val = q.data.split(":")[1]
+    if val == "custom":
         u["step"] = "property_custom"
         await q.message.reply_text("✍️ Напишіть тип житла:")
     else:
-        u["property"] = value
+        u["property"] = val
         u["step"] = "city"
         await q.message.reply_text("📍 В якому місті шукаєте житло?")
 
@@ -198,7 +190,7 @@ async def text_handler(update: Update, ctx):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("Так", callback_data="park:Так")],
             [InlineKeyboardButton("Ні", callback_data="park:Ні")],
-            [InlineKeyboardButton("Пізніше", callback_data="park:Пізніше")],
+            [InlineKeyboardButton("Пізніше", callback_data="park:Пізніше")]
         ])
         await update.message.reply_text("🚗 Чи потрібне паркування?", reply_markup=kb)
 
@@ -223,7 +215,7 @@ async def text_handler(update: Update, ctx):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🇺🇦 В Україні", callback_data="loc:ua")],
             [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="loc:sk")],
-            [InlineKeyboardButton("✍️ Інша країна", callback_data="loc:custom")],
+            [InlineKeyboardButton("✍️ Інша країна", callback_data="loc:custom")]
         ])
         await update.message.reply_text("🌍 Де ви зараз?", reply_markup=kb)
 
@@ -240,12 +232,12 @@ async def text_handler(update: Update, ctx):
 
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Так", callback_data="confirm:yes")],
-            [InlineKeyboardButton("❌ Ні", callback_data="confirm:no")],
+            [InlineKeyboardButton("❌ Ні", callback_data="confirm:no")]
         ])
         await update.message.reply_text(
             build_summary(u, REQUEST_COUNTER) + "\n\nВсе вірно?",
             reply_markup=kb,
-            parse_mode="Markdown",
+            parse_mode="Markdown"
         )
 
 # ================= CALLBACKS =================
@@ -275,7 +267,7 @@ async def ask_view_format(update: Update):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("💻 Онлайн", callback_data="view:Онлайн")],
         [InlineKeyboardButton("🚶 Фізичний", callback_data="view:Фізичний")],
-        [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view:Обидва")],
+        [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view:Обидва")]
     ])
     await update.message.reply_text("👀 Формат огляду?", reply_markup=kb)
 
@@ -289,7 +281,7 @@ async def view_handler(update: Update, ctx):
     kb = ReplyKeyboardMarkup(
         [[KeyboardButton("📞 Поділитись контактом для пошуку житла", request_contact=True)]],
         resize_keyboard=True,
-        one_time_keyboard=True,
+        one_time_keyboard=True
     )
     await q.message.reply_text("📞 Поділіться контактом для пошуку житла", reply_markup=kb)
 
@@ -299,7 +291,6 @@ async def contact_handler(update: Update, ctx):
     u["step"] = "name"
     await update.message.reply_text("👤 Як до вас можемо звертатись?", reply_markup=ReplyKeyboardRemove())
 
-# ================= CONFIRM =================
 async def confirm_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
@@ -310,16 +301,16 @@ async def confirm_handler(update: Update, ctx):
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Так", callback_data="terms:yes")],
-        [InlineKeyboardButton("❌ Ні", callback_data="terms:no")],
+        [InlineKeyboardButton("❌ Ні", callback_data="terms:no")]
     ])
     await q.message.reply_text(
         "ℹ️ *Умови співпраці:*\n"
-        "• депозит = орендна плата\n"
+        "• депозит за квартиру в розмірі орендної плати\n"
         "• повна або часткова комісія ріелтору\n"
-        "• можливий подвійний депозит\n\n"
-        "Погоджуєтесь?",
+        "• можливий подвійний депозит у випадку, якщо маєте дітей або тваринок\n\n"
+        "Чи погоджуєтесь?",
         reply_markup=kb,
-        parse_mode="Markdown",
+        parse_mode="Markdown"
     )
 
 async def terms_handler(update: Update, ctx):
@@ -334,7 +325,7 @@ async def terms_handler(update: Update, ctx):
 
     cursor.execute(
         "INSERT INTO requests (property, status, created_at) VALUES (?,?,?)",
-        (u["property"], STATUS_MAP["search"], datetime.now().isoformat()),
+        (u["property"], STATUS_MAP["search"], datetime.now().isoformat())
     )
     conn.commit()
 
@@ -342,15 +333,15 @@ async def terms_handler(update: Update, ctx):
         ADMIN_GROUP_ID,
         build_summary(u, u["req_id"]),
         reply_markup=status_keyboard(u["req_id"]),
-        parse_mode="Markdown",
+        parse_mode="Markdown"
     )
 
     await q.message.reply_text(
         "✅ Запит відправлено маклеру.\n"
         "Ми звʼяжемось з вами протягом *24–48 годин*.\n\n"
-        "👉 Долучайтесь до нашої групи з пропозиціями житла в Братиславі:\n"
-        "https://t.me/+IhcJixOP1_QyNjM0",
-        parse_mode="Markdown",
+        "🔔 Долучайтесь до нашої групи — тут актуальні пропозиції житла в Братиславі:\n"
+        "👉 https://t.me/+IhcJixOP1_QyNjM0",
+        parse_mode="Markdown"
     )
 
     reset_user(q.from_user.id)
@@ -365,7 +356,7 @@ async def status_handler(update: Update, ctx):
 
     cursor.execute(
         "UPDATE requests SET status=? WHERE id=?",
-        (new_status, req_id),
+        (new_status, req_id)
     )
     conn.commit()
 
@@ -373,59 +364,14 @@ async def status_handler(update: Update, ctx):
     await q.message.edit_text(
         text,
         reply_markup=status_keyboard(req_id),
-        parse_mode="Markdown",
+        parse_mode="Markdown"
     )
-
-# ================= STATS =================
-def get_stats(days):
-    since = datetime.now() - timedelta(days=days)
-    cursor.execute(
-        """
-        SELECT property, COUNT(*)
-        FROM requests
-        WHERE created_at >= ?
-          AND status = ?
-        GROUP BY property
-        ORDER BY COUNT(*) DESC
-        """,
-        (since.isoformat(), STATUS_MAP["search"]),
-    )
-    rows = cursor.fetchall()
-    total = sum(r[1] for r in rows)
-    return rows, total
-
-async def stats_today(update: Update, ctx):
-    rows, total = get_stats(1)
-    text = "📊 *Статистика (сьогодні)*\n\n"
-    for p, c in rows:
-        text += f"🏠 {p} — {c}\n"
-    text += f"\n🟡 Активних: {total}"
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-async def stats_week(update: Update, ctx):
-    rows, total = get_stats(7)
-    text = "📊 *Статистика (7 днів)*\n\n"
-    for p, c in rows:
-        text += f"🏠 {p} — {c}\n"
-    text += f"\n🟡 Активних: {total}"
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-async def stats_month(update: Update, ctx):
-    rows, total = get_stats(30)
-    text = "📊 *Статистика (30 днів)*\n\n"
-    for p, c in rows:
-        text += f"🏠 {p} — {c}\n"
-    text += f"\n🟡 Активних: {total}"
-    await update.message.reply_text(text, parse_mode="Markdown")
 
 # ================= MAIN =================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("stats_today", stats_today))
-    app.add_handler(CommandHandler("stats_week", stats_week))
-    app.add_handler(CommandHandler("stats_month", stats_month))
 
     app.add_handler(CallbackQueryHandler(deal_handler, pattern="^deal:"))
     app.add_handler(CallbackQueryHandler(property_handler, pattern="^prop:"))
