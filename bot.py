@@ -24,7 +24,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
 
 if not BOT_TOKEN or ADMIN_GROUP_ID == 0:
-    raise RuntimeError("❌ BOT_TOKEN або ADMIN_GROUP_ID не задані")
+    raise RuntimeError("BOT_TOKEN або ADMIN_GROUP_ID не задані")
 
 # ================= DB =================
 conn = sqlite3.connect("real_estate.db", check_same_thread=False)
@@ -71,7 +71,7 @@ def status_keyboard(req_id):
             InlineKeyboardButton("⚫ Не шукають", callback_data=f"status:stop:{req_id}"),
             InlineKeyboardButton("🔴 Закрили угоду", callback_data=f"status:closed:{req_id}")
         ]
-    )
+    ])
 
 def build_summary(u, req_id):
     tg = f"@{u['username']}" if u.get("username") else "—"
@@ -102,7 +102,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reset_user(update.effective_user.id)
     users[update.effective_user.id] = {
         "step": "deal",
-        "username": update.effective_user.username or "—"
+        "username": update.effective_user.username or ""
     }
 
     kb = InlineKeyboardMarkup([
@@ -137,12 +137,12 @@ async def property_handler(update: Update, ctx):
     await q.answer()
     u = users[q.from_user.id]
 
-    val = q.data.split(":")[1]
-    if val == "custom":
+    value = q.data.split(":")[1]
+    if value == "custom":
         u["step"] = "property_custom"
         await q.message.reply_text("✍️ Напишіть тип житла:")
     else:
-        u["property"] = val
+        u["property"] = value
         u["step"] = "city"
         await q.message.reply_text("📍 В якому місті шукаєте житло?")
 
@@ -346,7 +346,7 @@ async def terms_handler(update: Update, ctx):
 
     reset_user(q.from_user.id)
 
-# ================= STATUS UPDATE =================
+# ================= STATUS =================
 async def status_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
@@ -361,9 +361,13 @@ async def status_handler(update: Update, ctx):
     conn.commit()
 
     text = q.message.text.split("📌 Статус:")[0] + f"📌 Статус: {new_status}"
-    await q.message.edit_text(text, reply_markup=status_keyboard(req_id), parse_mode="Markdown")
+    await q.message.edit_text(
+        text,
+        reply_markup=status_keyboard(req_id),
+        parse_mode="Markdown"
+    )
 
-# ================= STATISTICS =================
+# ================= STATS =================
 def get_stats(days):
     since = datetime.now() - timedelta(days=days)
     cursor.execute("""
