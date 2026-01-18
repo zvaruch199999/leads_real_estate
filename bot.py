@@ -1,80 +1,55 @@
-import sqlite3
-from datetime import datetime
 from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
+    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    ReplyKeyboardMarkup, KeyboardButton
 )
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    MessageHandler, ContextTypes, filters
 )
+import os
 
-# ================= DB =================
-conn = sqlite3.connect("real_estate.db", check_same_thread=False)
-cursor = conn.cursor()
+from config import BOT_TOKEN, ADMIN_GROUP_ID
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    username TEXT,
-    name TEXT,
-    phone TEXT,
-    deal TEXT,
-    property TEXT,
-    city TEXT,
-    district TEXT,
-    for_whom TEXT,
-    job TEXT,
-    children TEXT,
-    pets TEXT,
-    parking TEXT,
-    move_in TEXT,
-    budget TEXT,
-    view_time TEXT,
-    location TEXT,
-    view_format TEXT,
-    status TEXT,
-    created_at TEXT,
-    updated_at TEXT
-)
-""")
-conn.commit()
-
+# =========================
+# ГЛОБАЛЬНІ ДАНІ
+# =========================
 users = {}
+REQUEST_COUNTER = 0
 
-STATUS_MAP = {
-    "searching": "🟡 В пошуках",
+STATUS_LABELS = {
+    "search": "🟡 В пошуках",
     "reserved": "🟢 Мають резервацію",
     "self_found": "🔵 Самі знайшли",
-    "other_broker": "🟠 Чужий маклер",
-    "not_looking": "⚫ Не шукають",
-    "deal_closed": "🔴 Закрили угоду",
+    "other_agent": "🟠 Знайшов чужий маклер",
+    "not_searching": "⚫ Не шукають",
+    "closed": "🔴 Закрили угоду"
 }
 
-# ================= HELPERS =================
+PROPERTY_TYPES = [
+    "🛏 Ліжко-місце",
+    "🏠 Студія",
+    "🏢 1-кімнатна",
+    "🏢 2-кімнатна",
+    "🏢 3-кімнатна",
+    "🏡 Будинок",
+    "✍️ Свій варіант"
+]
+
+# =========================
+# ДОПОМІЖНІ
+# =========================
 def reset_user(uid):
     users.pop(uid, None)
 
-def build_summary(u, req_id, with_status=True):
-    status_line = f"📌 Статус: {u['status']}\n\n" if with_status else ""
-    tg = f"@{u['username']}" if u.get("username") else "—"
-
+def build_summary(u):
     return (
-        f"📋 **Запит №{req_id}**\n"
-        f"{status_line}"
+        f"📋 **Запит №{u['req_id']}**\n"
+        f"📌 Статус: {STATUS_LABELS[u['status']]}\n\n"
         f"👤 Імʼя: {u['name']}\n"
-        f"🆔 Telegram: {tg}\n"
+        f"🆔 Telegram: @{u['username']}\n"
         f"📞 Телефон: {u['phone']}\n\n"
         f"🏠 Тип угоди: {u['deal']}\n"
-        f"🏡 Житло: {u['property']}\n"
+        f"🏡 Тип житла: {u['property']}\n"
         f"📍 Місто: {u['city']} / {u['district']}\n"
         f"👥 Для кого: {u['for_whom']}\n"
         f"💼 Діяльність: {u['job']}\n"
@@ -91,185 +66,176 @@ def build_summary(u, req_id, with_status=True):
 def status_keyboard(req_id):
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("🟡 В пошуках", callback_data=f"status_searching_{req_id}"),
-            InlineKeyboardButton("🟢 Мають резервацію", callback_data=f"status_reserved_{req_id}")
+            InlineKeyboardButton("🟡 В пошуках", callback_data=f"status:search:{req_id}"),
+            InlineKeyboardButton("🟢 Мають резервацію", callback_data=f"status:reserved:{req_id}")
         ],
         [
-            InlineKeyboardButton("🔵 Самі знайшли", callback_data=f"status_self_found_{req_id}"),
-            InlineKeyboardButton("🟠 Чужий маклер", callback_data=f"status_other_broker_{req_id}")
+            InlineKeyboardButton("🔵 Самі знайшли", callback_data=f"status:self_found:{req_id}"),
+            InlineKeyboardButton("🟠 Чужий маклер", callback_data=f"status:other_agent:{req_id}")
         ],
         [
-            InlineKeyboardButton("⚫ Не шукають", callback_data=f"status_not_looking_{req_id}"),
-            InlineKeyboardButton("🔴 Закрили угоду", callback_data=f"status_deal_closed_{req_id}")
+            InlineKeyboardButton("⚫ Не шукають", callback_data=f"status:not_searching:{req_id}"),
+            InlineKeyboardButton("🔴 Закрили угоду", callback_data=f"status:closed:{req_id}")
         ]
     ])
 
-# ================= START / RESET =================
+# =========================
+# START / RESET
+# =========================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reset_user(update.effective_user.id)
-    kb = [
-        [InlineKeyboardButton("🏠 Оренда", callback_data="deal_rent")],
-        [InlineKeyboardButton("🏡 Купівля", callback_data="deal_buy")]
-    ]
-    await update.message.reply_text(
-        "👋 Вітаємо!\nЩо вас цікавить?",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
+    users[update.effective_user.id] = {
+        "step": "deal",
+        "status": "search",
+        "username": update.effective_user.username or "немає"
+    }
 
-# ================= FLOW =================
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏠 Оренда", callback_data="deal:rent")],
+        [InlineKeyboardButton("🏡 Купівля", callback_data="deal:buy")]
+    ])
+    await update.message.reply_text("👋 Що вас цікавить?", reply_markup=kb)
+
+# =========================
+# CALLBACK HANDLERS
+# =========================
 async def deal_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
+    u = users[q.from_user.id]
+    u["deal"] = "Оренда" if "rent" in q.data else "Купівля"
+    u["step"] = "property"
 
-    users[q.from_user.id] = {
-        "step": "property",
-        "deal": "Оренда" if q.data == "deal_rent" else "Купівля",
-        "username": q.from_user.username,
-    }
-
-    kb = [
-        [InlineKeyboardButton("🛏 Ліжко-місце", callback_data="prop_Ліжко-місце")],
-        [InlineKeyboardButton("🏢 Студія", callback_data="prop_Студія")],
-        [InlineKeyboardButton("1-кімнатна", callback_data="prop_1-кімнатна")],
-        [InlineKeyboardButton("2-кімнатна", callback_data="prop_2-кімнатна")],
-        [InlineKeyboardButton("3-кімнатна", callback_data="prop_3-кімнатна")],
-        [InlineKeyboardButton("🏠 Будинок", callback_data="prop_Будинок")],
-        [InlineKeyboardButton("✍️ Свій варіант", callback_data="prop_custom")]
-    ]
-    await q.message.reply_text("🏡 Тип житла:", reply_markup=InlineKeyboardMarkup(kb))
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(p, callback_data=f"property:{p}")] for p in PROPERTY_TYPES])
+    await q.message.reply_text("🏡 Тип житла:", reply_markup=kb)
 
 async def property_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
 
-    if q.data == "prop_custom":
-        u["step"] = "property_text"
+    value = q.data.split(":", 1)[1]
+    if "Свій" in value:
+        u["step"] = "property_custom"
         await q.message.reply_text("✍️ Напишіть свій варіант житла:")
     else:
-        u["property"] = q.data.replace("prop_", "")
+        u["property"] = value
         u["step"] = "city"
         await q.message.reply_text("📍 В якому місті шукаєте житло?")
 
+async def status_handler(update: Update, ctx):
+    q = update.callback_query
+    await q.answer()
+    _, status, req_id = q.data.split(":")
+    for u in users.values():
+        if str(u.get("req_id")) == req_id:
+            u["status"] = status
+            await q.message.edit_text(
+                build_summary(u),
+                reply_markup=status_keyboard(req_id),
+                parse_mode="Markdown"
+            )
+            break
+
+# =========================
+# TEXT FLOW
+# =========================
 async def text_handler(update: Update, ctx):
     uid = update.effective_user.id
     if uid not in users:
         return
-
     u = users[uid]
     t = update.message.text
 
-    match u["step"]:
-        case "property_text":
-            u["property"] = t
-            u["step"] = "city"
-            await update.message.reply_text("📍 В якому місті шукаєте житло?")
+    if u["step"] == "property_custom":
+        u["property"] = t
+        u["step"] = "city"
+        await update.message.reply_text("📍 В якому місті шукаєте житло?")
 
-        case "city":
-            u["city"] = t
-            u["step"] = "district"
-            await update.message.reply_text("🗺 Який район?")
+    elif u["step"] == "city":
+        u["city"] = t
+        u["step"] = "district"
+        await update.message.reply_text("🗺 Який район?")
 
-        case "district":
-            u["district"] = t
-            u["step"] = "for_whom"
-            await update.message.reply_text("👥 Для кого шукаєте житло?")
+    elif u["step"] == "district":
+        u["district"] = t
+        u["step"] = "for_whom"
+        await update.message.reply_text("👥 Для кого шукаєте житло?")
 
-        case "for_whom":
-            u["for_whom"] = t
-            u["step"] = "job"
-            await update.message.reply_text("💼 Чим ви займаєтесь?")
+    elif u["step"] == "for_whom":
+        u["for_whom"] = t
+        u["step"] = "job"
+        await update.message.reply_text("💼 Чим ви займаєтесь?")
 
-        case "job":
-            u["job"] = t
-            u["step"] = "children"
-            await update.message.reply_text("🧒 Чи маєте дітей? Якщо ні — напишіть «Ні».")
+    elif u["step"] == "job":
+        u["job"] = t
+        u["step"] = "children"
+        await update.message.reply_text("🧒 Чи маєте дітей? Якщо ні — напишіть «Ні».")
 
-        case "children":
-            u["children"] = t
-            u["step"] = "pets"
-            await update.message.reply_text(
-                "🐾 Чи маєте тваринок?\n"
-                "Якщо так — напишіть яку і коротко про неї.\n"
-                "Якщо ні — напишіть «Ні»."
-            )
+    elif u["step"] == "children":
+        u["children"] = t
+        u["step"] = "pets"
+        await update.message.reply_text("🐾 Чи маєте тваринок? Якщо так — опишіть, якщо ні — «Ні».")
 
-        case "pets":
-            u["pets"] = t
-            u["step"] = "parking"
-            kb = [
-                [InlineKeyboardButton("Так", callback_data="park_yes")],
-                [InlineKeyboardButton("Ні", callback_data="park_no")],
-                [InlineKeyboardButton("Пізніше", callback_data="park_later")]
-            ]
-            await update.message.reply_text("🚗 Чи потрібне паркування?", reply_markup=InlineKeyboardMarkup(kb))
+    elif u["step"] == "pets":
+        u["pets"] = t
+        u["step"] = "parking"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Так", callback_data="parking:Так")],
+            [InlineKeyboardButton("Ні", callback_data="parking:Ні")],
+            [InlineKeyboardButton("Пізніше", callback_data="parking:Пізніше")]
+        ])
+        await update.message.reply_text("🚗 Чи потрібне паркування?", reply_markup=kb)
 
-        case "move_in":
-            u["move_in"] = t
-            u["step"] = "budget"
-            await update.message.reply_text("💶 Який бюджет на оренду в місяць (від–до€)?")
+    elif u["step"] == "move_in":
+        u["move_in"] = t
+        u["step"] = "budget"
+        await update.message.reply_text("💶 Який бюджет на оренду в місяць (від–до €)?")
 
-        case "budget":
-            u["budget"] = t
-            u["step"] = "view_time"
-            await update.message.reply_text("⏰ Коли ви доступні для оглядів?")
+    elif u["step"] == "budget":
+        u["budget"] = t
+        u["step"] = "view_time"
+        await update.message.reply_text("⏰ Коли ви доступні для оглядів?")
 
-        case "view_time":
-            u["view_time"] = t
-            u["step"] = "location"
-            kb = [
-                [InlineKeyboardButton("🇺🇦 В Україні", callback_data="loc_ua")],
-                [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="loc_sk")],
-                [InlineKeyboardButton("✍️ Інша країна", callback_data="loc_custom")]
-            ]
-            await update.message.reply_text("🌍 Ви в країні?", reply_markup=InlineKeyboardMarkup(kb))
+    elif u["step"] == "view_time":
+        u["view_time"] = t
+        u["step"] = "location"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🇺🇦 В Україні", callback_data="location:Україна")],
+            [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="location:Словаччина")],
+            [InlineKeyboardButton("✍️ Інша країна", callback_data="location:custom")]
+        ])
+        await update.message.reply_text("🌍 Ви в країні?", reply_markup=kb)
 
-        case "custom_location":
-            u["location"] = t
-            u["step"] = "view_format"
-            await ask_view_format(update.message)
+    elif u["step"] == "location_custom":
+        u["location"] = t
+        u["step"] = "view_format"
+        await ask_view_format(update)
 
-        case "name":
-            u["name"] = t
-            u["status"] = STATUS_MAP["searching"]
+    elif u["step"] == "name":
+        global REQUEST_COUNTER
+        REQUEST_COUNTER += 1
+        u["name"] = t
+        u["req_id"] = REQUEST_COUNTER
 
-            cursor.execute("""
-            INSERT INTO requests VALUES (
-                NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
-            )
-            """, (
-                uid, u["username"], u["name"], u["phone"], u["deal"],
-                u["property"], u["city"], u["district"], u["for_whom"],
-                u["job"], u["children"], u["pets"], u["parking"],
-                u["move_in"], u["budget"], u["view_time"],
-                u["location"], u["view_format"], u["status"],
-                datetime.now().isoformat(), datetime.now().isoformat()
-            ))
-            conn.commit()
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Так", callback_data="confirm:yes")],
+            [InlineKeyboardButton("❌ Ні", callback_data="confirm:no")]
+        ])
+        await update.message.reply_text(
+            build_summary(u) + "\n\nВсе вірно?",
+            reply_markup=kb,
+            parse_mode="Markdown"
+        )
 
-            req_id = cursor.lastrowid
-
-            await ctx.bot.send_message(
-                ADMIN_GROUP_ID,
-                build_summary(u, req_id),
-                parse_mode="Markdown",
-                reply_markup=status_keyboard(req_id)
-            )
-
-            await update.message.reply_text(
-                "✅ Запит відправлено маклеру.\n"
-                "Ми звʼяжемось з вами протягом **24–48 годин**.\n\n"
-                "🔔 Долучайтесь до нашої групи з пропозиціями житла в Братиславі:\n"
-                "👉 https://t.me/+IhcJixOP1_QyNjM0",
-                parse_mode="Markdown"
-            )
-            reset_user(uid)
-
+# =========================
+# ІНШІ CALLBACKS
+# =========================
 async def parking_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
-    u["parking"] = {"park_yes":"Так","park_no":"Ні","park_later":"Пізніше"}[q.data]
+    u["parking"] = q.data.split(":")[1]
     u["step"] = "move_in"
     await q.message.reply_text("📅 Яка найкраща дата для заїзду?")
 
@@ -277,28 +243,28 @@ async def location_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
-
-    if q.data == "loc_custom":
-        u["step"] = "custom_location"
+    value = q.data.split(":")[1]
+    if value == "custom":
+        u["step"] = "location_custom"
         await q.message.reply_text("✍️ Напишіть країну:")
     else:
-        u["location"] = "Україна" if q.data == "loc_ua" else "Словаччина"
+        u["location"] = value
         u["step"] = "view_format"
-        await ask_view_format(q.message)
+        await ask_view_format(update)
 
-async def ask_view_format(msg):
-    kb = [
-        [InlineKeyboardButton("💻 Онлайн", callback_data="view_online")],
-        [InlineKeyboardButton("🚶 Фізичний", callback_data="view_offline")],
-        [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view_both")]
-    ]
-    await msg.reply_text("👀 Формат огляду?", reply_markup=InlineKeyboardMarkup(kb))
+async def ask_view_format(update: Update):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💻 Онлайн", callback_data="view:Онлайн")],
+        [InlineKeyboardButton("🚶 Фізичний", callback_data="view:Фізичний")],
+        [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view:Обидва")]
+    ])
+    await update.message.reply_text("👀 Формат огляду?", reply_markup=kb)
 
 async def view_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
     u = users[q.from_user.id]
-    u["view_format"] = {"view_online":"Онлайн","view_offline":"Фізичний","view_both":"Обидва варіанти"}[q.data]
+    u["view_format"] = q.data.split(":")[1]
     u["step"] = "contact"
 
     kb = ReplyKeyboardMarkup(
@@ -306,7 +272,7 @@ async def view_handler(update: Update, ctx):
         resize_keyboard=True,
         one_time_keyboard=True
     )
-    await q.message.reply_text("📞 Поділіться контактом для пошуку житла 👇", reply_markup=kb)
+    await q.message.reply_text("📞 Поділіться контактом для пошуку житла:", reply_markup=kb)
 
 async def contact_handler(update: Update, ctx):
     u = users[update.effective_user.id]
@@ -314,45 +280,68 @@ async def contact_handler(update: Update, ctx):
     u["step"] = "name"
     await update.message.reply_text("👤 Як до вас можемо звертатись?")
 
-# ================= STATUS HANDLER =================
-async def status_handler(update: Update, ctx):
+async def confirm_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
+    if "no" in q.data:
+        reset_user(q.from_user.id)
+        await q.message.reply_text("❌ Запит скасовано.")
+        return
 
-    parts = q.data.split("_")
-    req_id = int(parts[-1])
-    status_key = "_".join(parts[1:-1])
-    new_status = STATUS_MAP[status_key]
-
-    cursor.execute(
-        "UPDATE requests SET status=?, updated_at=? WHERE id=?",
-        (new_status, datetime.now().isoformat(), req_id)
-    )
-    conn.commit()
-
-    lines = q.message.text.split("\n")
-    for i, l in enumerate(lines):
-        if l.startswith("📌 Статус:"):
-            lines[i] = f"📌 Статус: {new_status}"
-            break
-
-    await q.message.edit_text(
-        "\n".join(lines),
-        parse_mode="Markdown",
-        reply_markup=q.message.reply_markup
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Так", callback_data="terms:yes")],
+        [InlineKeyboardButton("❌ Ні", callback_data="terms:no")]
+    ])
+    await q.message.reply_text(
+        "ℹ️ **Умови співпраці:**\n"
+        "• депозит може дорівнювати орендній платі\n"
+        "• оплачується повна або часткова комісія ріелтору\n"
+        "• можливий подвійний депозит при дітях або тваринах\n\n"
+        "Чи погоджуєтесь?",
+        reply_markup=kb,
+        parse_mode="Markdown"
     )
 
-# ================= MAIN =================
+async def terms_handler(update: Update, ctx):
+    q = update.callback_query
+    await q.answer()
+    if "no" in q.data:
+        reset_user(q.from_user.id)
+        await q.message.reply_text("❌ Дякуємо за відповідь.")
+        return
+
+    u = users[q.from_user.id]
+    msg = await ctx.bot.send_message(
+        ADMIN_GROUP_ID,
+        build_summary(u),
+        reply_markup=status_keyboard(u["req_id"]),
+        parse_mode="Markdown"
+    )
+
+    await q.message.reply_text(
+        "✅ Запит відправлено маклеру.\n"
+        "Ми звʼяжемось з вами протягом **24–48 годин**.\n\n"
+        "👉 Долучайтесь до нашої групи з пропозиціями житла в Братиславі:\n"
+        "https://t.me/+IhcJixOP1_QyNjM0",
+        parse_mode="Markdown"
+    )
+    reset_user(q.from_user.id)
+
+# =========================
+# MAIN
+# =========================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(deal_handler, pattern="^deal_"))
-    app.add_handler(CallbackQueryHandler(property_handler, pattern="^prop_"))
-    app.add_handler(CallbackQueryHandler(parking_handler, pattern="^park_"))
-    app.add_handler(CallbackQueryHandler(location_handler, pattern="^loc_"))
-    app.add_handler(CallbackQueryHandler(view_handler, pattern="^view_"))
-    app.add_handler(CallbackQueryHandler(status_handler, pattern="^status_"))
+    app.add_handler(CallbackQueryHandler(deal_handler, pattern="^deal"))
+    app.add_handler(CallbackQueryHandler(property_handler, pattern="^property"))
+    app.add_handler(CallbackQueryHandler(parking_handler, pattern="^parking"))
+    app.add_handler(CallbackQueryHandler(location_handler, pattern="^location"))
+    app.add_handler(CallbackQueryHandler(view_handler, pattern="^view"))
+    app.add_handler(CallbackQueryHandler(confirm_handler, pattern="^confirm"))
+    app.add_handler(CallbackQueryHandler(terms_handler, pattern="^terms"))
+    app.add_handler(CallbackQueryHandler(status_handler, pattern="^status"))
     app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
