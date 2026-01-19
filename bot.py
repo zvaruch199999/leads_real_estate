@@ -1,888 +1,251 @@
-# bot.py  (python-telegram-bot v20+)
 import os
-import re
-import sqlite3
-from datetime import datetime, timedelta, timezone
-
+from datetime import datetime, timedelta
 from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardRemove,
+    Update, ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardButton, InlineKeyboardMarkup
 )
-from telegram.constants import ParseMode
 from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 )
 
-# =========================
-# CONFIG / ENV
-# =========================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_GROUP_ID = os.getenv("ADMIN_GROUP_ID", "").strip()
+# ================== CONFIG ==================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
+ADMIN_ID = 1057216609
+COOLDOWN_HOURS = 2
 
 if not BOT_TOKEN or not ADMIN_GROUP_ID:
     raise RuntimeError("BOT_TOKEN або ADMIN_GROUP_ID не задані")
 
-ADMIN_GROUP_ID = int(ADMIN_GROUP_ID)
+# ================== STATES ==================
+(
+    CHOOSE_FLOW,
 
-# Адмін тільки ти (Варіант A)
-ADMIN_IDS = {1057216609}
+    # RENT
+    RENT_TYPE, RENT_CITY, RENT_DISTRICT, RENT_FOR_WHOM,
+    RENT_JOB, RENT_CHILDREN, RENT_PETS, RENT_PARKING,
+    RENT_MOVEIN, RENT_BUDGET, RENT_VIEWTIME, RENT_LOCATION,
+    RENT_VIEWFORMAT, RENT_CONTACT, RENT_NAME, RENT_CONFIRM,
 
-# Ліміт для звичайних користувачів
-COOLDOWN_HOURS = 2
+    # BUY
+    BUY_TYPE, BUY_DETAILS, BUY_CITY, BUY_PRICE,
+    BUY_FINANCE, BUY_TIME, BUY_VIEW, BUY_CONTACT,
+    BUY_NAME, BUY_CONFIRM
+) = range(26)
 
-GROUP_INVITE_LINK = "https://t.me/+IhcJixOP1_QyNjM0"
+# ================== STORAGE ==================
+LEADS = {}
+LAST_REQUEST = {}
 
-# =========================
-# DB
-# =========================
-conn = sqlite3.connect("real_estate.db", check_same_thread=False)
-cur = conn.cursor()
+def can_create(user_id: int) -> bool:
+    if user_id == ADMIN_ID:
+        return True
+    last = LAST_REQUEST.get(user_id)
+    if not last:
+        return True
+    return datetime.now() - last > timedelta(hours=COOLDOWN_HOURS)
 
-cur.execute(
-    """
-CREATE TABLE IF NOT EXISTS leads (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    req_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    username TEXT,
-    tg_fullname TEXT,
+def mark_request(user_id: int):
+    LAST_REQUEST[user_id] = datetime.now()
 
-    deal TEXT,
-    property TEXT,
-    city TEXT,
-    district TEXT,
-    for_whom TEXT,
-    job TEXT,
-    children TEXT,
-    pets TEXT,
-    parking TEXT,
-    move_in TEXT,
-    budget TEXT,
-    view_time TEXT,
-    wishes TEXT,
-    location TEXT,
-    view_format TEXT,
-
-    phone TEXT,
-    name TEXT,
-
-    status_key TEXT NOT NULL DEFAULT 'searching',
-    created_at TEXT NOT NULL,
-
-    group_message_id INTEGER
-);
-"""
-)
-cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_user_created ON leads(user_id, created_at);")
-cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status_key);")
-conn.commit()
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def is_admin(uid: int) -> bool:
-    return uid in ADMIN_IDS
-
-
-def has_active_lead(uid: int) -> bool:
-    # Активні: searching/reserved
-    cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM leads
-        WHERE user_id=?
-          AND status_key IN ('searching','reserved')
-        """,
-        (uid,),
-    )
-    return (cur.fetchone()[0] or 0) > 0
-
-
-def has_recent_lead(uid: int, hours: int) -> bool:
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM leads
-        WHERE user_id=?
-          AND created_at >= ?
-        """,
-        (uid, cutoff.isoformat()),
-    )
-    return (cur.fetchone()[0] or 0) > 0
-
-
-def next_req_id() -> int:
-    cur.execute("SELECT COALESCE(MAX(req_id),0) FROM leads")
-    return int(cur.fetchone()[0] or 0) + 1
-
-
-def normalize_phone(s: str) -> str:
-    return re.sub(r"[^\d+]", "", (s or "").strip())
-
-
-PHONE_RE = re.compile(r"^\+?\d[\d\s\-\(\)]{6,}$")
-
-# =========================
-# UI MAPS
-# =========================
-PARKING_MAP = {"park_yes": "Так", "park_no": "Ні", "park_later": "Пізніше"}
-
-VIEW_MAP = {"view_online": "Онлайн", "view_offline": "Фізичний", "view_both": "Обидва варіанти"}
-
-LOCATION_MAP = {"loc_ua": "Україна", "loc_sk": "Словаччина"}
-
-PROPERTY_BUTTONS = [
-    ("🛏 Ліжко-місце", "prop_bed"),
-    ("🚪 Кімната", "prop_room"),
-    ("🏢 Студія", "prop_studio"),
-    ("1️⃣ 1-кімнатна", "prop_1"),
-    ("2️⃣ 2-кімнатна", "prop_2"),
-    ("3️⃣ 3-кімнатна", "prop_3"),
-    ("4️⃣ 4-кімнатна", "prop_4"),
-    ("5️⃣ 5-кімнатна", "prop_5"),
-    ("🏠 Будинок", "prop_house"),
-    ("✍️ Свій варіант", "prop_custom"),
-]
-PROPERTY_VALUE = {
-    "prop_bed": "Ліжко-місце",
-    "prop_room": "Кімната",
-    "prop_studio": "Студія",
-    "prop_1": "1-кімнатна",
-    "prop_2": "2-кімнатна",
-    "prop_3": "3-кімнатна",
-    "prop_4": "4-кімнатна",
-    "prop_5": "5-кімнатна",
-    "prop_house": "Будинок",
-}
-
-STATUS_LABEL = {
-    "searching": "🟡 В пошуках",
-    "reserved": "🟢 Мають резервацію",
-    "self_found": "🔵 Самі знайшли",
-    "other_agent": "🟠 Знайшов чужий маклер",
-    "not_searching": "⚫ Не шукають вже",
-    "closed": "🔴 Закрили угоду",
-}
-
-
-def status_keyboard(lead_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
+def status_keyboard(lead_id):
+    return InlineKeyboardMarkup([
         [
-            [
-                InlineKeyboardButton("🟡 В пошуках", callback_data=f"status:{lead_id}:searching"),
-                InlineKeyboardButton("🟢 Мають резервацію", callback_data=f"status:{lead_id}:reserved"),
-            ],
-            [
-                InlineKeyboardButton("🔵 Самі знайшли", callback_data=f"status:{lead_id}:self_found"),
-                InlineKeyboardButton("🟠 Чужий маклер", callback_data=f"status:{lead_id}:other_agent"),
-            ],
-            [
-                InlineKeyboardButton("⚫ Не шукають", callback_data=f"status:{lead_id}:not_searching"),
-                InlineKeyboardButton("🔴 Закрили угоду", callback_data=f"status:{lead_id}:closed"),
-            ],
+            InlineKeyboardButton("🟡 В пошуках", callback_data=f"status|{lead_id}|search"),
+            InlineKeyboardButton("🟢 Резервація", callback_data=f"status|{lead_id}|reserve"),
+        ],
+        [
+            InlineKeyboardButton("🔵 Самі знайшли", callback_data=f"status|{lead_id}|self"),
+            InlineKeyboardButton("🟠 Чужий маклер", callback_data=f"status|{lead_id}|other"),
+        ],
+        [
+            InlineKeyboardButton("⚫ Не шукають", callback_data=f"status|{lead_id}|stop"),
+            InlineKeyboardButton("🔴 Закрили угоду", callback_data=f"status|{lead_id}|deal"),
         ]
-    )
+    ])
 
-
-# =========================
-# FLOW STATE
-# =========================
-users = {}  # uid -> dict
-
-
-def ensure_user(uid: int):
-    if uid not in users:
-        users[uid] = {"step": None}
-
-
-def reset_user(uid: int):
-    users.pop(uid, None)
-
-
-def tg_display(user) -> str:
-    if user.username:
-        return f"@{user.username}"
-    # якщо нема username — залишимо tg://user?id=...
-    return f"tg://user?id={user.id}"
-
-
-def safe_html(s: str) -> str:
-    # мінімальна санітизація
-    return (s or "").replace("<", "").replace(">", "")
-
-
-def build_summary_html(u: dict, req_id: int, status_key: str) -> str:
-    return (
-        f"📋 <b>Запит №{req_id}</b>\n"
-        f"📌 <b>Статус:</b> {STATUS_LABEL.get(status_key, STATUS_LABEL['searching'])}\n\n"
-        f"👤 <b>Імʼя/Прізвище:</b> {safe_html(u.get('name','—'))}\n"
-        f"🆔 <b>Telegram:</b> {safe_html(u.get('tg','—'))}\n"
-        f"📞 <b>Телефон:</b> {safe_html(u.get('phone','—'))}\n\n"
-        f"1️⃣ 🏠 <b>Тип угоди:</b> {safe_html(u.get('deal','—'))}\n"
-        f"2️⃣ 🏡 <b>Тип житла:</b> {safe_html(u.get('property','—'))}\n"
-        f"3️⃣ 📍 <b>Місто:</b> {safe_html(u.get('city','—'))}\n"
-        f"4️⃣ 🗺 <b>Район:</b> {safe_html(u.get('district','—'))}\n"
-        f"5️⃣ 👥 <b>Для кого:</b> {safe_html(u.get('for_whom','—'))}\n"
-        f"6️⃣ 💼 <b>Діяльність:</b> {safe_html(u.get('job','—'))}\n"
-        f"7️⃣ 🧒 <b>Діти:</b> {safe_html(u.get('children','—'))}\n"
-        f"8️⃣ 🐾 <b>Тваринки:</b> {safe_html(u.get('pets','—'))}\n"
-        f"9️⃣ 🚗 <b>Паркування:</b> {safe_html(u.get('parking','—'))}\n"
-        f"🔟 📅 <b>Заїзд:</b> {safe_html(u.get('move_in','—'))}\n"
-        f"1️⃣1️⃣ 💶 <b>Бюджет оренда (€/міс):</b> {safe_html(u.get('budget','—'))}\n"
-        f"1️⃣2️⃣ ⏰ <b>Огляди (дні/час):</b> {safe_html(u.get('view_time','—'))}\n"
-        f"1️⃣3️⃣ ✨ <b>Побажання:</b> {safe_html(u.get('wishes','—'))}\n"
-        f"1️⃣4️⃣ 🌍 <b>Зараз в:</b> {safe_html(u.get('location','—'))}\n"
-        f"1️⃣5️⃣ 👀 <b>Формат огляду:</b> {safe_html(u.get('view_format','—'))}\n"
-    )
-
-
-# =========================
-# COMMANDS
-# =========================
+# ================== START ==================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    args = ctx.args or []
-    admin_test = is_admin(uid) and len(args) > 0 and args[0].lower() == "test"
-
-    # 1) Блок якщо є активна заявка (для всіх, крім /start test адміна)
-    if not admin_test and has_active_lead(uid):
+    if not can_create(uid):
         await update.message.reply_text(
             "⚠️ У вас вже є активна заявка і вона опрацьовується.\n"
-            "Будь ласка, дочекайтесь її вирішення — ми звʼяжемось з вами, щойно буде результат."
+            "Будь ласка, дочекайтесь її вирішення."
         )
-        return
-
-    # 2) Кулдаун 2 години для звичайних користувачів
-    if (not admin_test) and (not is_admin(uid)) and has_recent_lead(uid, hours=COOLDOWN_HOURS):
-        await update.message.reply_text(
-            f"⏳ Ви вже подавали заявку протягом останніх {COOLDOWN_HOURS} годин.\n"
-            "Спробуйте пізніше."
-        )
-        return
-
-    reset_user(uid)
-    ensure_user(uid)
-
-    users[uid]["tg"] = tg_display(update.effective_user)
-    users[uid]["tg_fullname"] = update.effective_user.full_name or ""
-    users[uid]["user_id"] = uid
-
-    kb = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🏠 Оренда", callback_data="deal_rent")],
-            [InlineKeyboardButton("🏡 Купівля", callback_data="deal_buy")],
-        ]
-    )
-    # Перше повідомлення без номера
-    await update.message.reply_text("👋 Вітаємо!\nЩо вас цікавить?", reply_markup=kb)
-
-
-async def reset_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    reset_user(update.effective_user.id)
-    await update.message.reply_text("🔄 Анкету скинуто. Натисніть /start щоб почати заново.")
-
-
-async def admin_reset_me(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if not is_admin(uid):
-        await update.message.reply_text("⛔ Доступ тільки для адміна.")
-        return
-
-    old = "1970-01-01T00:00:00+00:00"
-    cur.execute(
-        """
-        UPDATE leads
-        SET status_key='closed', created_at=?
-        WHERE user_id=?
-        """,
-        (old, uid),
-    )
-    conn.commit()
-    await update.message.reply_text("✅ Скинуто. Можеш тестити /start або /start test.")
-
-
-# =========================
-# CALLBACKS (FLOW)
-# =========================
-async def deal_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    ensure_user(uid)
-
-    users[uid]["deal"] = "Оренда" if q.data == "deal_rent" else "Купівля"
-    users[uid]["step"] = "property"
-
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(t, callback_data=cb)] for (t, cb) in PROPERTY_BUTTONS])
-    await q.message.reply_text("1️⃣ 🏡 Який тип житла вас цікавить?", reply_markup=kb)
-
-
-async def property_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    u = users.get(uid)
-    if not u:
-        return
-
-    if q.data == "prop_custom":
-        u["step"] = "property_text"
-        await q.message.reply_text("✍️ Напишіть тип житла вручну:")
-        return
-
-    u["property"] = PROPERTY_VALUE.get(q.data, q.data)
-    u["step"] = "city"
-    await q.message.reply_text("2️⃣ 📍 В якому місті шукаєте житло?")
-
-
-async def parking_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    u = users.get(uid)
-    if not u:
-        return
-
-    u["parking"] = PARKING_MAP.get(q.data, "Пізніше")
-    u["step"] = "move_in"
-    await q.message.reply_text("🔟 📅 Яка найкраща дата для вашого заїзду?")
-
-
-async def location_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    u = users.get(uid)
-    if not u:
-        return
-
-    if q.data == "loc_custom":
-        u["step"] = "custom_location"
-        await q.message.reply_text("✍️ Напишіть країну:")
-        return
-
-    u["location"] = LOCATION_MAP.get(q.data, "—")
-    u["step"] = "view_format"
-
-    kb = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("💻 Онлайн", callback_data="view_online")],
-            [InlineKeyboardButton("🚶 Фізичний", callback_data="view_offline")],
-            [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view_both")],
-        ]
-    )
-    await q.message.reply_text("1️⃣5️⃣ 👀 Який формат огляду вам підходить?", reply_markup=kb)
-
-
-async def view_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    u = users.get(uid)
-    if not u:
-        return
-
-    u["view_format"] = VIEW_MAP.get(q.data, "—")
-    u["step"] = "phone"
+        return ConversationHandler.END
 
     kb = ReplyKeyboardMarkup(
-        [[KeyboardButton("📞 Поділитись контактом для пошуку житла", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
+        [["🏠 Оренда", "🏡 Купівля"]],
+        resize_keyboard=True
     )
-    await q.message.reply_text(
-        "📞 Поділіться контактом для пошуку житла (кнопкою нижче)\n"
-        "або напишіть номер телефону вручну (наприклад: +421901234567):",
-        reply_markup=kb,
+    await update.message.reply_text(
+        "Вітаємо! Що вас цікавить?",
+        reply_markup=kb
+    )
+    return CHOOSE_FLOW
+
+# ================== FLOW SELECT ==================
+async def choose_flow(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    ctx.user_data.clear()
+
+    if "Оренда" in text:
+        await update.message.reply_text("1️⃣ Який тип житла шукаєте?")
+        return RENT_TYPE
+
+    if "Купівля" in text:
+        await update.message.reply_text("1️⃣ Яку нерухомість шукаєте для купівлі?")
+        return BUY_TYPE
+
+    await update.message.reply_text("Оберіть варіант кнопкою ⬇️")
+    return CHOOSE_FLOW
+
+# ================== RENT FLOW ==================
+async def rent_type(u, c): c.user_data["type"]=u.message.text; await u.message.reply_text("2️⃣ В якому місті?"); return RENT_CITY
+async def rent_city(u,c): c.user_data["city"]=u.message.text; await u.message.reply_text("3️⃣ Який район?"); return RENT_DISTRICT
+async def rent_district(u,c): c.user_data["district"]=u.message.text; await u.message.reply_text("4️⃣ Для кого житло?"); return RENT_FOR_WHOM
+async def rent_for_whom(u,c): c.user_data["for"]=u.message.text; await u.message.reply_text("5️⃣ Чим ви займаєтесь?"); return RENT_JOB
+async def rent_job(u,c): c.user_data["job"]=u.message.text; await u.message.reply_text("6️⃣ Чи є діти?"); return RENT_CHILDREN
+async def rent_children(u,c): c.user_data["children"]=u.message.text; await u.message.reply_text("7️⃣ Чи є тваринки?"); return RENT_PETS
+async def rent_pets(u,c): c.user_data["pets"]=u.message.text; await u.message.reply_text("8️⃣ Чи потрібне паркування?"); return RENT_PARKING
+async def rent_parking(u,c): c.user_data["parking"]=u.message.text; await u.message.reply_text("9️⃣ Коли заїзд?"); return RENT_MOVEIN
+async def rent_movein(u,c): c.user_data["movein"]=u.message.text; await u.message.reply_text("🔟 Бюджет оренди (від–до €)?"); return RENT_BUDGET
+async def rent_budget(u,c): c.user_data["budget"]=u.message.text; await u.message.reply_text("1️⃣1️⃣ Коли доступні для оглядів?"); return RENT_VIEWTIME
+async def rent_viewtime(u,c): c.user_data["viewtime"]=u.message.text; await u.message.reply_text("1️⃣2️⃣ Ви зараз в якій країні?"); return RENT_LOCATION
+async def rent_location(u,c): c.user_data["location"]=u.message.text; await u.message.reply_text("1️⃣3️⃣ Формат огляду?"); return RENT_VIEWFORMAT
+async def rent_viewformat(u,c):
+    c.user_data["viewformat"]=u.message.text
+    kb = ReplyKeyboardMarkup([[KeyboardButton("📞 Поділитись контактом", request_contact=True)]], resize_keyboard=True)
+    await u.message.reply_text("1️⃣4️⃣ Контакт для звʼязку:", reply_markup=kb)
+    return RENT_CONTACT
+
+async def rent_contact(u,c):
+    c.user_data["phone"] = u.message.contact.phone_number if u.message.contact else u.message.text
+    await u.message.reply_text("1️⃣5️⃣ Як до вас звертатись?")
+    return RENT_NAME
+
+async def rent_name(u,c):
+    c.user_data["name"]=u.message.text
+    summary = "\n".join([f"{k}: {v}" for k,v in c.user_data.items()])
+    await u.message.reply_text(f"📋 Перевірте дані:\n\n{summary}\n\nВсе вірно? (Так/Ні)")
+    return RENT_CONFIRM
+
+async def rent_confirm(u,c):
+    if "Так" not in u.message.text:
+        await u.message.reply_text("Заявку скасовано.")
+        return ConversationHandler.END
+
+    uid = u.from_user.id
+    mark_request(uid)
+    lead_id = f"RENT-{uid}-{int(datetime.now().timestamp())}"
+
+    await c.bot.send_message(
+        ADMIN_GROUP_ID,
+        f"🏠 ОРЕНДА\n{c.user_data}\n@{u.from_user.username}",
+        reply_markup=status_keyboard(lead_id)
     )
 
+    await u.message.reply_text(
+        "✅ Запит прийнято!\n"
+        "Маклер звʼяжеться з вами протягом 24–48 годин.\n\n"
+        "👉 Група з пропозиціями:\nhttps://t.me/+IhcJixOP1_QyNjM0"
+    )
+    return ConversationHandler.END
 
-async def confirm_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+# ================== BUY FLOW ==================
+async def buy_type(u,c): c.user_data["type"]=u.message.text; await u.message.reply_text("2️⃣ Опишіть очікування"); return BUY_DETAILS
+async def buy_details(u,c): c.user_data["details"]=u.message.text; await u.message.reply_text("3️⃣ Де купівля?"); return BUY_CITY
+async def buy_city(u,c): c.user_data["city"]=u.message.text; await u.message.reply_text("4️⃣ Бюджет?"); return BUY_PRICE
+async def buy_price(u,c): c.user_data["price"]=u.message.text; await u.message.reply_text("5️⃣ Фінансування?"); return BUY_FINANCE
+async def buy_finance(u,c): c.user_data["finance"]=u.message.text; await u.message.reply_text("6️⃣ Коли купівля?"); return BUY_TIME
+async def buy_time(u,c): c.user_data["time"]=u.message.text; await u.message.reply_text("7️⃣ Формат оглядів?"); return BUY_VIEW
+
+async def buy_view(u,c):
+    c.user_data["view"]=u.message.text
+    kb = ReplyKeyboardMarkup([[KeyboardButton("📞 Поділитись контактом", request_contact=True)]], resize_keyboard=True)
+    await u.message.reply_text("8️⃣ Контакт:", reply_markup=kb)
+    return BUY_CONTACT
+
+async def buy_contact(u,c):
+    c.user_data["phone"]=u.message.contact.phone_number if u.message.contact else u.message.text
+    await u.message.reply_text("9️⃣ Як до вас звертатись?")
+    return BUY_NAME
+
+async def buy_name(u,c):
+    c.user_data["name"]=u.message.text
+    await u.message.reply_text(f"📋 Перевірте дані:\n{c.user_data}\n\nВсе вірно? (Так/Ні)")
+    return BUY_CONFIRM
+
+async def buy_confirm(u,c):
+    if "Так" not in u.message.text:
+        return ConversationHandler.END
+
+    uid = u.from_user.id
+    mark_request(uid)
+    lead_id = f"BUY-{uid}-{int(datetime.now().timestamp())}"
+
+    await c.bot.send_message(
+        ADMIN_GROUP_ID,
+        f"🏡 КУПІВЛЯ\n{c.user_data}\n@{u.from_user.username}",
+        reply_markup=status_keyboard(lead_id)
+    )
+
+    await u.message.reply_text(
+        "✅ Запит прийнято!\n"
+        "Ми звʼяжемось з вами протягом 24–48 годин.\n\n"
+        "👉 https://t.me/+IhcJixOP1_QyNjM0"
+    )
+    return ConversationHandler.END
+
+# ================== STATUS ==================
+async def status_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    u = users.get(uid)
-    if not u:
-        return
+    await q.answer("Статус оновлено")
 
-    if q.data == "confirm_no":
-        reset_user(uid)
-        await q.message.reply_text("❌ Запит скасовано. Натисніть /start щоб почати знову.")
-        return
-
-    # confirm_yes -> show terms
-    kb = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("✅ Так", callback_data="terms_yes")],
-            [InlineKeyboardButton("❌ Ні", callback_data="terms_no")],
-        ]
-    )
-    await q.message.reply_text(
-        "ℹ️ <b>Умови співпраці:</b>\n\n"
-        "• депозит може дорівнювати в розмірі орендної плати\n"
-        "• оплачується повна або часткова комісія ріелтору\n"
-        "• можливий подвійний депозит при дітях або тваринах\n\n"
-        "<b>Чи погоджуєтесь?</b>",
-        reply_markup=kb,
-        parse_mode=ParseMode.HTML,
-    )
-
-
-async def terms_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    u = users.get(uid)
-    if not u:
-        return
-
-    if q.data == "terms_no":
-        reset_user(uid)
-        await q.message.reply_text("❌ Добре, ми не будемо продовжувати роботу.")
-        return
-
-    # Save lead in DB
-    req_id = next_req_id()
-    u["req_id"] = req_id
-
-    status_key = "searching"
-    created_at = now_iso()
-
-    cur.execute(
-        """
-        INSERT INTO leads (
-            req_id, user_id, username, tg_fullname,
-            deal, property, city, district, for_whom, job, children, pets, parking,
-            move_in, budget, view_time, wishes, location, view_format,
-            phone, name, status_key, created_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            req_id,
-            u.get("user_id"),
-            u.get("tg"),
-            u.get("tg_fullname", ""),
-            u.get("deal", ""),
-            u.get("property", ""),
-            u.get("city", ""),
-            u.get("district", ""),
-            u.get("for_whom", ""),
-            u.get("job", ""),
-            u.get("children", ""),
-            u.get("pets", ""),
-            u.get("parking", ""),
-            u.get("move_in", ""),
-            u.get("budget", ""),
-            u.get("view_time", ""),
-            u.get("wishes", ""),
-            u.get("location", ""),
-            u.get("view_format", ""),
-            u.get("phone", ""),
-            u.get("name", ""),
-            status_key,
-            created_at,
-        ),
-    )
-    conn.commit()
-    lead_id = cur.lastrowid
-
-    # Send to group (with status buttons)
-    msg_text = build_summary_html(u, req_id=req_id, status_key=status_key)
-    sent = await ctx.bot.send_message(
-        chat_id=ADMIN_GROUP_ID,
-        text=msg_text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=status_keyboard(lead_id),
-        disable_web_page_preview=True,
-    )
-
-    # Store message id
-    cur.execute("UPDATE leads SET group_message_id=? WHERE id=?", (sent.message_id, lead_id))
-    conn.commit()
-
-    # Final message to user (with link preview)
-    await q.message.reply_text(
-        "✅ <b>Запит успішно відправлено маклеру!</b>\n\n"
-        "📞 Маклер звʼяжеться з вами протягом <b>24–48 годин</b>.\n\n"
-        "🏡 Долучайтесь до нашої групи з актуальними пропозиціями житла в Братиславі:\n"
-        f"{GROUP_INVITE_LINK}",
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=False,
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
-    reset_user(uid)
-
-
-# =========================
-# STATUS CALLBACK (GROUP)
-# =========================
-async def status_change_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    # Only in our group
-    if q.message.chat_id != ADMIN_GROUP_ID:
-        return
-
-    # parse: status:<lead_id>:<status_key>
-    try:
-        _, lead_id_s, new_key = q.data.split(":")
-        lead_id = int(lead_id_s)
-    except Exception:
-        return
-
-    if new_key not in STATUS_LABEL:
-        return
-
-    # Update DB
-    cur.execute("UPDATE leads SET status_key=? WHERE id=?", (new_key, lead_id))
-    conn.commit()
-
-    # Reload lead to rebuild message
-    cur.execute(
-        """
-        SELECT req_id, username, tg_fullname, deal, property, city, district, for_whom, job,
-               children, pets, parking, move_in, budget, view_time, wishes, location, view_format,
-               phone, name, group_message_id
-        FROM leads
-        WHERE id=?
-        """,
-        (lead_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return
-
-    (
-        req_id, username, tg_fullname, deal, prop, city, district, for_whom, job,
-        children, pets, parking, move_in, budget, view_time, wishes, location, view_format,
-        phone, name, group_message_id
-    ) = row
-
-    temp_u = {
-        "tg": username or "—",
-        "tg_fullname": tg_fullname or "",
-        "deal": deal or "",
-        "property": prop or "",
-        "city": city or "",
-        "district": district or "",
-        "for_whom": for_whom or "",
-        "job": job or "",
-        "children": children or "",
-        "pets": pets or "",
-        "parking": parking or "",
-        "move_in": move_in or "",
-        "budget": budget or "",
-        "view_time": view_time or "",
-        "wishes": wishes or "",
-        "location": location or "",
-        "view_format": view_format or "",
-        "phone": phone or "",
-        "name": name or "",
-    }
-
-    new_text = build_summary_html(temp_u, req_id=req_id, status_key=new_key)
-
-    # Edit same message
-    try:
-        await ctx.bot.edit_message_text(
-            chat_id=ADMIN_GROUP_ID,
-            message_id=group_message_id or q.message.message_id,
-            text=new_text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=status_keyboard(lead_id),
-            disable_web_page_preview=True,
-        )
-    except Exception:
-        # If edit fails, at least keep keyboard updated
-        try:
-            await ctx.bot.edit_message_reply_markup(
-                chat_id=ADMIN_GROUP_ID,
-                message_id=group_message_id or q.message.message_id,
-                reply_markup=status_keyboard(lead_id),
-            )
-        except Exception:
-            pass
-
-
-# =========================
-# STATS (admin only)
-# =========================
-def render_stats(days: int) -> str:
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    cur.execute(
-        """
-        SELECT property, status_key, COUNT(*)
-        FROM leads
-        WHERE created_at >= ?
-        GROUP BY property, status_key
-        """,
-        (cutoff.isoformat(),),
-    )
-    rows = cur.fetchall()
-
-    if not rows:
-        return f"📊 <b>Статистика за {days} дн.</b>\n\nНемає заявок."
-
-    prop_tot = {}
-    status_tot = {k: 0 for k in STATUS_LABEL.keys()}
-    prop_status = {}
-
-    for prop, st, cnt in rows:
-        prop = prop or "(невідомо)"
-        st = st or "searching"
-        cnt = int(cnt)
-
-        prop_tot[prop] = prop_tot.get(prop, 0) + cnt
-        if st in status_tot:
-            status_tot[st] += cnt
-        else:
-            status_tot[st] = cnt
-
-        prop_status.setdefault(prop, {})
-        prop_status[prop][st] = prop_status[prop].get(st, 0) + cnt
-
-    total = sum(prop_tot.values())
-    active = status_tot.get("searching", 0) + status_tot.get("reserved", 0)
-
-    lines = [f"📊 <b>Статистика за {days} дн.</b>\n", f"🧾 <b>Всього:</b> {total}", f"🟡🟢 <b>Активних:</b> {active}\n"]
-
-    lines.append("🏡 <b>По типу житла:</b>")
-    for p, c in sorted(prop_tot.items(), key=lambda x: (-x[1], x[0])):
-        lines.append(f"• {p}: <b>{c}</b>")
-
-    lines.append("\n📌 <b>По статусах:</b>")
-    for st in ["searching", "reserved", "self_found", "other_agent", "not_searching", "closed"]:
-        lines.append(f"• {STATUS_LABEL[st]}: <b>{status_tot.get(st, 0)}</b>")
-
-    lines.append("\n🧩 <b>Детально (тип → статус):</b>")
-    for p, c in sorted(prop_tot.items(), key=lambda x: (-x[1], x[0])):
-        parts = []
-        st_map = prop_status.get(p, {})
-        for st in ["searching", "reserved", "self_found", "other_agent", "not_searching", "closed"]:
-            if st_map.get(st, 0):
-                parts.append(f"{STATUS_LABEL[st]} {st_map[st]}")
-        lines.append(f"• <b>{p}</b>: " + (", ".join(parts) if parts else "—"))
-
-    return "\n".join(lines)
-
-
-async def stats_today(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    await update.message.reply_text(render_stats(1), parse_mode=ParseMode.HTML)
-
-
-async def stats_week(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    await update.message.reply_text(render_stats(7), parse_mode=ParseMode.HTML)
-
-
-async def stats_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    await update.message.reply_text(render_stats(30), parse_mode=ParseMode.HTML)
-
-
-# =========================
-# TEXT + CONTACT HANDLERS
-# =========================
-async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    if uid not in users:
-        return
-    u = users[uid]
-    step = u.get("step")
-    t = (update.message.text or "").strip()
-
-    if step == "property_text":
-        u["property"] = t
-        u["step"] = "city"
-        await update.message.reply_text("2️⃣ 📍 В якому місті шукаєте житло?")
-        return
-
-    if step == "city":
-        u["city"] = t
-        u["step"] = "district"
-        await update.message.reply_text("3️⃣ 🗺 Який район?")
-        return
-
-    if step == "district":
-        u["district"] = t
-        u["step"] = "for_whom"
-        await update.message.reply_text("4️⃣ 👥 Розпишіть, для кого шукаєте житло:")
-        return
-
-    if step == "for_whom":
-        u["for_whom"] = t
-        u["step"] = "job"
-        await update.message.reply_text("5️⃣ 💼 Чим ви займаєтесь? (діяльність):")
-        return
-
-    if step == "job":
-        u["job"] = t
-        u["step"] = "children"
-        await update.message.reply_text(
-            "6️⃣ 🧒 Чи маєте дітей?\nЯкщо так — напишіть вік та стать.\nЯкщо ні — «Ні»."
-        )
-        return
-
-    if step == "children":
-        u["children"] = t
-        u["step"] = "pets"
-        await update.message.reply_text(
-            "7️⃣ 🐾 Чи маєте тваринок?\nЯкщо так — напишіть яку і трошки про неї.\nЯкщо ні — «Ні»."
-        )
-        return
-
-    if step == "pets":
-        u["pets"] = t
-        u["step"] = "parking"
-        kb = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("Так", callback_data="park_yes")],
-                [InlineKeyboardButton("Ні", callback_data="park_no")],
-                [InlineKeyboardButton("Пізніше", callback_data="park_later")],
-            ]
-        )
-        await update.message.reply_text("9️⃣ 🚗 Чи потрібне паркування?", reply_markup=kb)
-        return
-
-    if step == "move_in":
-        u["move_in"] = t
-        u["step"] = "budget"
-        await update.message.reply_text("1️⃣1️⃣ 💶 Який бюджет на оренду в місяць (від–до €)?")
-        return
-
-    if step == "budget":
-        u["budget"] = t
-        u["step"] = "view_time"
-        await update.message.reply_text("1️⃣2️⃣ ⏰ Як зазвичай ви доступні для оглядів? (дні/час)")
-        return
-
-    if step == "view_time":
-        u["view_time"] = t
-        u["step"] = "wishes"
-        await update.message.reply_text("1️⃣3️⃣ ✨ Напишіть особливі побажання на житло:")
-        return
-
-    if step == "wishes":
-        u["wishes"] = t
-        u["step"] = "location"
-        kb = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("🇺🇦 В Україні", callback_data="loc_ua")],
-                [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="loc_sk")],
-                [InlineKeyboardButton("✍️ Інша країна", callback_data="loc_custom")],
-            ]
-        )
-        await update.message.reply_text("1️⃣4️⃣ 🌍 Де ви зараз знаходитесь?", reply_markup=kb)
-        return
-
-    if step == "custom_location":
-        u["location"] = t
-        u["step"] = "view_format"
-        kb = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("💻 Онлайн", callback_data="view_online")],
-                [InlineKeyboardButton("🚶 Фізичний", callback_data="view_offline")],
-                [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view_both")],
-            ]
-        )
-        await update.message.reply_text("1️⃣5️⃣ 👀 Який формат огляду вам підходить?", reply_markup=kb)
-        return
-
-    if step == "phone":
-        # manual phone
-        if not PHONE_RE.match(t):
-            await update.message.reply_text(
-                "⚠️ Не схоже на номер.\nВведіть у форматі +421901234567 або натисніть кнопку «Поділитись контактом»."
-            )
-            return
-        u["phone"] = normalize_phone(t)
-        u["step"] = "name"
-        await update.message.reply_text("1️⃣6️⃣ 👤 Як до вас можемо звертатись? (Імʼя/Прізвище)", reply_markup=ReplyKeyboardRemove())
-        return
-
-    if step == "name":
-        u["name"] = t
-        # show summary to confirm
-        kb = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("✅ Так, вірно", callback_data="confirm_yes")],
-                [InlineKeyboardButton("❌ Ні, скасувати", callback_data="confirm_no")],
-            ]
-        )
-        preview = build_summary_html(u, req_id=0, status_key="searching").replace("Запит №0", "Перевірте дані")
-        await update.message.reply_text(preview + "\n<b>Все вірно?</b>", parse_mode=ParseMode.HTML, reply_markup=kb)
-        return
-
-
-async def contact_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    u = users.get(uid)
-    if not u:
-        return
-    if u.get("step") != "phone":
-        return
-
-    if update.message.contact and update.message.contact.phone_number:
-        u["phone"] = normalize_phone(update.message.contact.phone_number)
-        u["step"] = "name"
-        await update.message.reply_text(
-            "1️⃣6️⃣ 👤 Як до вас можемо звертатись? (Імʼя/Прізвище)",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-
-
-# =========================
-# MAIN
-# =========================
+# ================== MAIN ==================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # commands
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("reset", reset_cmd))
-    app.add_handler(CommandHandler("admin_reset_me", admin_reset_me))
+    conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            CHOOSE_FLOW: [MessageHandler(filters.TEXT, choose_flow)],
 
-    # stats (admin only)
-    app.add_handler(CommandHandler("stats_today", stats_today))
-    app.add_handler(CommandHandler("stats_week", stats_week))
-    app.add_handler(CommandHandler("stats_month", stats_month))
+            RENT_TYPE: [MessageHandler(filters.TEXT, rent_type)],
+            RENT_CITY: [MessageHandler(filters.TEXT, rent_city)],
+            RENT_DISTRICT: [MessageHandler(filters.TEXT, rent_district)],
+            RENT_FOR_WHOM: [MessageHandler(filters.TEXT, rent_for_whom)],
+            RENT_JOB: [MessageHandler(filters.TEXT, rent_job)],
+            RENT_CHILDREN: [MessageHandler(filters.TEXT, rent_children)],
+            RENT_PETS: [MessageHandler(filters.TEXT, rent_pets)],
+            RENT_PARKING: [MessageHandler(filters.TEXT, rent_parking)],
+            RENT_MOVEIN: [MessageHandler(filters.TEXT, rent_movein)],
+            RENT_BUDGET: [MessageHandler(filters.TEXT, rent_budget)],
+            RENT_VIEWTIME: [MessageHandler(filters.TEXT, rent_viewtime)],
+            RENT_LOCATION: [MessageHandler(filters.TEXT, rent_location)],
+            RENT_VIEWFORMAT: [MessageHandler(filters.TEXT, rent_viewformat)],
+            RENT_CONTACT: [MessageHandler(filters.ALL, rent_contact)],
+            RENT_NAME: [MessageHandler(filters.TEXT, rent_name)],
+            RENT_CONFIRM: [MessageHandler(filters.TEXT, rent_confirm)],
 
-    # callbacks flow
-    app.add_handler(CallbackQueryHandler(deal_handler, pattern=r"^deal_"))
-    app.add_handler(CallbackQueryHandler(property_handler, pattern=r"^prop_"))
-    app.add_handler(CallbackQueryHandler(parking_handler, pattern=r"^park_"))
-    app.add_handler(CallbackQueryHandler(location_handler, pattern=r"^loc_"))
-    app.add_handler(CallbackQueryHandler(view_handler, pattern=r"^view_"))
-    app.add_handler(CallbackQueryHandler(confirm_handler, pattern=r"^confirm_"))
-    app.add_handler(CallbackQueryHandler(terms_handler, pattern=r"^terms_"))
+            BUY_TYPE: [MessageHandler(filters.TEXT, buy_type)],
+            BUY_DETAILS: [MessageHandler(filters.TEXT, buy_details)],
+            BUY_CITY: [MessageHandler(filters.TEXT, buy_city)],
+            BUY_PRICE: [MessageHandler(filters.TEXT, buy_price)],
+            BUY_FINANCE: [MessageHandler(filters.TEXT, buy_finance)],
+            BUY_TIME: [MessageHandler(filters.TEXT, buy_time)],
+            BUY_VIEW: [MessageHandler(filters.TEXT, buy_view)],
+            BUY_CONTACT: [MessageHandler(filters.ALL, buy_contact)],
+            BUY_NAME: [MessageHandler(filters.TEXT, buy_name)],
+            BUY_CONFIRM: [MessageHandler(filters.TEXT, buy_confirm)],
+        },
+        fallbacks=[]
+    )
 
-    # group status buttons
-    app.add_handler(CallbackQueryHandler(status_change_handler, pattern=r"^status:"))
-
-    # message handlers
-    app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    app.add_handler(conv)
+    app.add_handler(CallbackQueryHandler(status_cb, pattern="^status\\|"))
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
