@@ -248,7 +248,7 @@ async def ask_view_format(msg):
         [InlineKeyboardButton("🚶 Фізичний", callback_data="view_offline")],
         [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view_both")],
     ]
-    await msg.reply_text("13️⃣ 👀 Який формат огляду вам підходить?", reply_markup=InlineKeyboardMarkup(kb))
+    await msg.reply_text("1️⃣3️⃣ 👀 Який формат огляду вам підходить?", reply_markup=InlineKeyboardMarkup(kb))
 
 
 async def view_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -277,7 +277,7 @@ async def contact_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     u["phone"] = normalize_phone(update.message.contact.phone_number)
     u["step"] = "name"
-    await update.message.reply_text("14️⃣ 👤 Як до вас можемо звертатись? (Імʼя/Прізвище)", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("1️⃣4️⃣ 👤 Як до вас можемо звертатись? (Імʼя/Прізвище)", reply_markup=ReplyKeyboardRemove())
 
 
 async def confirm_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -529,17 +529,17 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif step == "move_in":
         u["move_in"] = t
         u["step"] = "view_time"
-        await update.message.reply_text("10️⃣ ⏰ Коли ви доступні для оглядів? (дні/час)")
+        await update.message.reply_text("1️⃣0️⃣ ⏰ Коли ви доступні для оглядів? (дні/час)")
 
     elif step == "view_time":
         u["view_time"] = t
         u["step"] = "wishes"
-        await update.message.reply_text("11️⃣ ✨ Напишіть особливі побажання до житла:")
+        await update.message.reply_text("1️⃣1️⃣ ✨ Напишіть особливі побажання до житла:")
 
     elif step == "wishes":
         u["wishes"] = t
         u["step"] = "budget"
-        await update.message.reply_text("12️⃣ 💶 Який бюджет на оренду в місяць (від–до €)?")
+        await update.message.reply_text("1️⃣2️⃣ 💶 Який бюджет на оренду в місяць (від–до €)?")
 
     elif step == "budget":
         u["budget"] = t
@@ -549,7 +549,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🇸🇰 В Словаччині", callback_data="loc_sk")],
             [InlineKeyboardButton("✍️ Інша країна", callback_data="loc_custom")],
         ]
-        await update.message.reply_text("13️⃣ 🌍 Де ви зараз?", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("1️⃣3️⃣ 🌍 Де ви зараз?", reply_markup=InlineKeyboardMarkup(kb))
 
     elif step == "custom_location":
         u["location"] = t
