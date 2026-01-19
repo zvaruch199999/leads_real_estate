@@ -19,13 +19,6 @@ from telegram.ext import (
     filters
 )
 
-# ================== CONFIG ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
-
-if not BOT_TOKEN or ADMIN_GROUP_ID == 0:
-    raise RuntimeError("BOT_TOKEN або ADMIN_GROUP_ID не задані")
-
 # ================== DATABASE ==================
 conn = sqlite3.connect("real_estate.db", check_same_thread=False)
 cursor = conn.cursor()
