@@ -26,11 +26,12 @@ if not BOT_TOKEN or not ADMIN_GROUP_ID_RAW:
     raise RuntimeError("BOT_TOKEN або ADMIN_GROUP_ID не задані")
 ADMIN_GROUP_ID = int(ADMIN_GROUP_ID_RAW)
 
+GROUP_LINK = "https://t.me/+IhcJixOP1_QyNjM0"
+
 # ================== DB ==================
 conn = sqlite3.connect("requests.db", check_same_thread=False)
 cur = conn.cursor()
 
-# Таблиця заявок (для статистики та статусів)
 cur.execute("""
 CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,7 +42,6 @@ CREATE TABLE IF NOT EXISTS requests (
 )
 """)
 
-# Мапа message_id (в групі) -> request_id (щоб апдейтити статус по кнопках)
 cur.execute("""
 CREATE TABLE IF NOT EXISTS message_map (
     group_chat_id INTEGER NOT NULL,
@@ -61,7 +61,6 @@ PARKING_MAP = {"park_yes": "Так", "park_no": "Ні", "park_later": "Пізн�
 VIEW_MAP = {"view_online": "Онлайн", "view_offline": "Фізичний", "view_both": "Обидва варіанти"}
 LOCATION_MAP = {"loc_ua": "Україна", "loc_sk": "Словаччина"}
 
-# Статуси (з кнопок)
 STATUS_KEY_TO_LABEL = {
     "search": "🟡 В пошуках",
     "reserve": "🟢 Мають резервацію",
@@ -70,8 +69,6 @@ STATUS_KEY_TO_LABEL = {
     "stop": "⚫ Не шукають вже",
     "closed": "🔴 Закрили угоду",
 }
-
-# Для БД зберігаємо саме текст (людський), щоб статистика була читабельна
 DEFAULT_STATUS = STATUS_KEY_TO_LABEL["search"]
 
 
@@ -297,25 +294,35 @@ async def terms_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=status_keyboard(req_id),
     )
 
-    # прив'язка повідомлення до req_id (для надійності)
     cur.execute(
         "INSERT OR REPLACE INTO message_map (group_chat_id, group_message_id, request_id) VALUES (?, ?, ?)",
         (sent.chat_id, sent.message_id, req_id),
     )
     conn.commit()
 
-    # фінал клієнту (завжди через send_message, щоб не губилось)
-    await ctx.bot.send_message(
-        chat_id=uid,
-        text=(
-            "✅ **Запит успішно відправлено маклеру!**\n\n"
-            "📞 Маклер звʼяжеться з вами протягом **24–48 годин**.\n\n"
-            "🏘 Долучайтесь до нашої групи з актуальними пропозиціями житла в Братиславі:\n"
-            "👉 https://t.me/+IhcJixOP1_QyNjM0"
-        ),
-        parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove(),
+    # ✅ ФІНАЛ КЛІЄНТУ — БЕЗ MARKDOWN (щоб _ в лінку не ламав повідомлення)
+    final_text = (
+        "✅ Запит успішно відправлено маклеру!\n\n"
+        "📞 Маклер звʼяжеться з вами протягом 24–48 годин.\n\n"
+        "🏘 Долучайтесь до нашої групи з актуальними пропозиціями житла в Братиславі:\n"
+        f"👉 {GROUP_LINK}"
     )
+
+    try:
+        # важливо: reply_text на q.message інколи стабільніше в цьому сценарії
+        await q.message.reply_text(
+            final_text,
+            reply_markup=ReplyKeyboardRemove(),
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        # fallback
+        await ctx.bot.send_message(
+            chat_id=uid,
+            text=final_text,
+            reply_markup=ReplyKeyboardRemove(),
+            disable_web_page_preview=True,
+        )
 
     users.pop(uid, None)
 
@@ -325,7 +332,6 @@ async def status_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    # callback_data: status:<key>:<req_id>
     try:
         _, key, req_id_str = q.data.split(":")
         req_id = int(req_id_str)
@@ -336,11 +342,9 @@ async def status_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not new_status:
         return
 
-    # Оновлюємо БД
     cur.execute("UPDATE requests SET status=? WHERE id=?", (new_status, req_id))
     conn.commit()
 
-    # Оновлюємо текст повідомлення в групі
     lines = (q.message.text or "").split("\n")
     for i, line in enumerate(lines):
         if line.startswith("📌 Статус:"):
@@ -432,12 +436,10 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     elif step == "name":
         u["name"] = t
-        # показуємо підсумок і підтвердження
         kb = [
             [InlineKeyboardButton("✅ Так, вірно", callback_data="confirm_yes")],
             [InlineKeyboardButton("❌ Ні, скасувати", callback_data="confirm_no")],
         ]
-        # тимчасово req_id = 0 (для показу)
         await update.message.reply_text(
             build_user_summary(u, 0),
             reply_markup=InlineKeyboardMarkup(kb),
@@ -461,9 +463,6 @@ async def contact_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ================== STATS ==================
 def format_stats(rows):
-    """
-    rows: [(status, housing_type, count)]
-    """
     if not rows:
         return "Немає даних за цей період"
 
@@ -518,14 +517,12 @@ async def stats_month(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("stats_today", stats_today))
     app.add_handler(CommandHandler("stats_week", stats_week))
     app.add_handler(CommandHandler("stats_month", stats_month))
 
-    # callbacks
     app.add_handler(CallbackQueryHandler(status_handler, pattern="^status:"))
     app.add_handler(CallbackQueryHandler(deal_handler, pattern="^deal_"))
     app.add_handler(CallbackQueryHandler(property_handler, pattern="^prop_"))
@@ -535,7 +532,6 @@ def main():
     app.add_handler(CallbackQueryHandler(confirm_handler, pattern="^confirm_"))
     app.add_handler(CallbackQueryHandler(terms_handler, pattern="^terms_"))
 
-    # messages
     app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
