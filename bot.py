@@ -948,8 +948,40 @@ def main():
     app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 
+    app.add_handler(CommandHandler("stats", stats_menu))
+app.add_handler(CallbackQueryHandler(stats_callback, pattern=r"^stats:"))
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
+async def stats_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # тільки адмін
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    kb = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📊 Сьогодні", callback_data="stats:1")],
+            [InlineKeyboardButton("📊 Тиждень", callback_data="stats:7")],
+            [InlineKeyboardButton("📊 Місяць", callback_data="stats:30")],
+        ]
+    )
+    await update.message.reply_text("📊 Оберіть період статистики:", reply_markup=kb)
+
+
+async def stats_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    # тільки адмін
+    if q.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        days = int(q.data.split(":")[1])
+    except Exception:
+        return
+
+    text = render_stats(days)  # ВАЖЛИВО: у тебе вже є render_stats()
+    await q.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 if __name__ == "__main__":
     main()
