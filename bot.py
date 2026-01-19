@@ -19,6 +19,18 @@ from telegram.ext import (
     filters
 )
 
+# ================== CONFIG ==================
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_GROUP_ID = os.environ.get("ADMIN_GROUP_ID")
+
+if BOT_TOKEN is None:
+    raise RuntimeError("BOT_TOKEN не заданий у Variables")
+
+if ADMIN_GROUP_ID is None:
+    raise RuntimeError("ADMIN_GROUP_ID не заданий у Variables")
+
+ADMIN_GROUP_ID = int(ADMIN_GROUP_ID)
+
 # ================== DATABASE ==================
 conn = sqlite3.connect("real_estate.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -102,7 +114,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🏠 Оренда", callback_data="deal:rent")],
         [InlineKeyboardButton("🏡 Купівля", callback_data="deal:buy")]
     ])
-    await update.message.reply_text("👋 Що вас цікавить?", reply_markup=kb)
+    await update.message.reply_text("👋 Вітаємо! Що вас цікавить?", reply_markup=kb)
 
 # ================== DEAL ==================
 async def deal_handler(update: Update, ctx):
@@ -122,7 +134,7 @@ async def deal_handler(update: Update, ctx):
         [InlineKeyboardButton("🏡 Будинок", callback_data="prop:Будинок")],
         [InlineKeyboardButton("✍️ Свій варіант", callback_data="prop:custom")]
     ])
-    await q.message.reply_text("🏡 Тип житла:", reply_markup=kb)
+    await q.message.reply_text("🏡 Який тип житла?", reply_markup=kb)
 
 # ================== PROPERTY ==================
 async def property_handler(update: Update, ctx):
@@ -175,7 +187,11 @@ async def text_handler(update: Update, ctx):
     elif u["step"] == "children":
         u["children"] = t
         u["step"] = "pets"
-        await update.message.reply_text("🐾 Чи маєте тваринок? Якщо ні — «Ні»")
+        await update.message.reply_text(
+            "🐾 Чи маєте тваринок?\n"
+            "Якщо так — напишіть яку і трохи про неї.\n"
+            "Якщо ні — «Ні»"
+        )
 
     elif u["step"] == "pets":
         u["pets"] = t
@@ -262,7 +278,7 @@ async def ask_view_format(update: Update):
         [InlineKeyboardButton("🚶 Фізичний", callback_data="view:Фізичний")],
         [InlineKeyboardButton("🔁 Обидва варіанти", callback_data="view:Обидва")]
     ])
-    await update.message.reply_text("👀 Формат огляду?", reply_markup=kb)
+    await update.message.reply_text("👀 Який формат огляду?", reply_markup=kb)
 
 async def view_handler(update: Update, ctx):
     q = update.callback_query
