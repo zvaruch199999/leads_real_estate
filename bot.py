@@ -198,7 +198,7 @@ STATUS_LABEL = {
     "searching": "🟡 В пошуках",
     "reserved": "🟢 Мають резервацію",
     "self_found": "🔵 Самі знайшли",
-    "other_agent": "🟠 Знайшов чужий маклер",
+    "other_agent": "🟠 Знайшов чужий рієлтор",
     "not_searching": "⚫ Не шукають вже",
     "closed": "🔴 Закрили угоду",
 }
@@ -213,7 +213,7 @@ def status_keyboard(lead_id: int) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("🔵 Самі знайшли", callback_data=f"status:{lead_id}:self_found"),
-                InlineKeyboardButton("🟠 Чужий маклер", callback_data=f"status:{lead_id}:other_agent"),
+                InlineKeyboardButton("🟠 Чужий рієлтор", callback_data=f"status:{lead_id}:other_agent"),
             ],
             [
                 InlineKeyboardButton("⚫ Не шукають", callback_data=f"status:{lead_id}:not_searching"),
@@ -361,8 +361,8 @@ async def finalize_lead_and_notify(ctx: ContextTypes.DEFAULT_TYPE, user_message,
     conn.commit()
 
     await user_message.reply_text(
-        "✅ <b>Запит успішно відправлено маклеру!</b>\n\n"
-        "📞 Маклер звʼяжеться з вами протягом <b>24–48 годин</b>.\n\n"
+        "✅ <b>Запит успішно відправлено рієлтору!</b>\n\n"
+        "📞 Рієлтор звʼяжеться з вами протягом <b>24–48 годин</b>.\n\n"
         "🏡 Долучайтесь до нашої групи з актуальними пропозиціями житла в Братиславі:\n"
         f"{GROUP_INVITE_LINK}",
         parse_mode=ParseMode.HTML,
