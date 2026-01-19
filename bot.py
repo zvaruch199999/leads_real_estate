@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS leads (
 )
 cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_user_created ON leads(user_id, created_at);")
 cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status_key);")
+cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_deal_created ON leads(deal, created_at);")
 conn.commit()
 
 
@@ -373,23 +374,26 @@ async def finalize_lead_and_notify(ctx: ContextTypes.DEFAULT_TYPE, user_message,
 
 
 # =========================
-# STATS
+# STATS (розділення Оренда/Купівля)
 # =========================
-def render_stats(days: int) -> str:
+def render_stats(days: int, deal_filter: str) -> str:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     cur.execute(
         """
         SELECT property, status_key, COUNT(*)
         FROM leads
         WHERE created_at >= ?
+          AND deal = ?
         GROUP BY property, status_key
         """,
-        (cutoff.isoformat(),),
+        (cutoff.isoformat(), deal_filter),
     )
     rows = cur.fetchall()
 
+    title = f"📊 <b>Статистика ({deal_filter}) за {days} дн.</b>"
+
     if not rows:
-        return f"📊 <b>Статистика за {days} дн.</b>\n\nНемає заявок."
+        return f"{title}\n\nНемає заявок."
 
     prop_tot = {}
     status_tot = {k: 0 for k in STATUS_LABEL.keys()}
@@ -410,20 +414,24 @@ def render_stats(days: int) -> str:
     active = status_tot.get("searching", 0) + status_tot.get("reserved", 0)
 
     lines = [
-        f"📊 <b>Статистика за {days} дн.</b>\n",
+        title,
+        "",
         f"🧾 <b>Всього:</b> {total}",
-        f"🟡🟢 <b>Активних:</b> {active}\n",
+        f"🟡🟢 <b>Активних:</b> {active}",
+        "",
         "🏡 <b>По категоріях (тип житла):</b>",
     ]
 
     for p, c in sorted(prop_tot.items(), key=lambda x: (-x[1], x[0])):
         lines.append(f"• {p}: <b>{c}</b>")
 
-    lines.append("\n📌 <b>По статусах:</b>")
+    lines.append("")
+    lines.append("📌 <b>По статусах:</b>")
     for st in ["searching", "reserved", "self_found", "other_agent", "not_searching", "closed"]:
         lines.append(f"• {STATUS_LABEL[st]}: <b>{status_tot.get(st, 0)}</b>")
 
-    lines.append("\n🧩 <b>Детально (категорія → статус):</b>")
+    lines.append("")
+    lines.append("🧩 <b>Детально (категорія → статус):</b>")
     for p, _ in sorted(prop_tot.items(), key=lambda x: (-x[1], x[0])):
         parts = []
         st_map = prop_status.get(p, {})
@@ -440,12 +448,32 @@ async def stats_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📊 Сьогодні", callback_data="stats:1")],
-            [InlineKeyboardButton("📊 Тиждень", callback_data="stats:7")],
-            [InlineKeyboardButton("📊 Місяць", callback_data="stats:30")],
+            [InlineKeyboardButton("🏠 Оренда", callback_data="statsdeal:Оренда")],
+            [InlineKeyboardButton("🏡 Купівля", callback_data="statsdeal:Купівля")],
         ]
     )
-    await update.message.reply_text("📊 Оберіть період статистики:", reply_markup=kb)
+    await update.message.reply_text("📊 Оберіть тип статистики:", reply_markup=kb)
+
+
+async def stats_deal_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        deal = q.data.split(":", 1)[1]
+    except Exception:
+        return
+
+    kb = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📊 Сьогодні", callback_data=f"stats:{deal}:1")],
+            [InlineKeyboardButton("📊 Тиждень", callback_data=f"stats:{deal}:7")],
+            [InlineKeyboardButton("📊 Місяць", callback_data=f"stats:{deal}:30")],
+        ]
+    )
+    await q.message.reply_text(f"📊 Оберіть період статистики ({deal}):", reply_markup=kb)
 
 
 async def stats_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -453,11 +481,15 @@ async def stats_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     if q.from_user.id not in ADMIN_IDS:
         return
+
+    # stats:<deal>:<days>
     try:
-        days = int(q.data.split(":")[1])
+        _, deal, days_s = q.data.split(":")
+        days = int(days_s)
     except Exception:
         return
-    await q.message.reply_text(render_stats(days), parse_mode=ParseMode.HTML)
+
+    await q.message.reply_text(render_stats(days, deal), parse_mode=ParseMode.HTML)
 
 
 # =========================
@@ -674,7 +706,6 @@ async def confirm_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Купівля -> без умов
     await finalize_lead_and_notify(ctx, q.message, u)
 
 
@@ -705,7 +736,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     step = u.get("step")
     t = (update.message.text or "").strip()
 
-    # ====== КУПІВЛЯ ======
+    # Купівля
     if step == "buy_property_text":
         u["property"] = t
         u["step"] = "buy_details"
@@ -748,7 +779,6 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     if step == "buy_viewings":
         u["view_time"] = t
-        # для купівлі не питаємо країну/формат огляду — одразу контакт
         u.setdefault("district", "—")
         u.setdefault("for_whom", "—")
         u.setdefault("children", "—")
@@ -759,7 +789,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ask_contact(update.message, u)
         return
 
-    # ====== ОРЕНДА ======
+    # Оренда
     if step == "property_text":
         u["property"] = t
         u["step"] = "city"
@@ -787,13 +817,13 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if step == "job":
         u["job"] = t
         u["step"] = "children"
-        await update.message.reply_text("6️⃣ 🧒 Чи маєте дітей?\nЯкщо так — напишіть вік та стать.\nЯкщо ні — «Ні».")
+        await update.message.reply_text("6️⃣ 🧒 Чи маєте дітей? Якщо так — вік та стать. Якщо ні — «Ні».")
         return
 
     if step == "children":
         u["children"] = t
         u["step"] = "pets"
-        await update.message.reply_text("7️⃣ 🐾 Чи маєте тваринок?\nЯкщо так — напишіть яку і трошки про неї.\nЯкщо ні — «Ні».")
+        await update.message.reply_text("7️⃣ 🐾 Чи маєте тваринок? Якщо так — які. Якщо ні — «Ні».")
         return
 
     if step == "pets":
@@ -853,7 +883,7 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("1️⃣5️⃣ 👀 Який формат огляду вам підходить?", reply_markup=kb)
         return
 
-    # ====== спільне: телефон/ім'я/узагальнення ======
+    # спільне: телефон/ім'я/підтвердження
     if step == "phone":
         if not PHONE_RE.match(t):
             await update.message.reply_text(
@@ -976,21 +1006,6 @@ async def status_change_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# CALLBACKS: /stats кнопки
-# =========================
-async def stats_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.from_user.id not in ADMIN_IDS:
-        return
-    try:
-        days = int(q.data.split(":")[1])
-    except Exception:
-        return
-    await q.message.reply_text(render_stats(days), parse_mode=ParseMode.HTML)
-
-
-# =========================
 # MAIN
 # =========================
 def main():
@@ -1002,7 +1017,11 @@ def main():
     app.add_handler(CommandHandler("admin_reset_me", admin_reset_me))
     app.add_handler(CommandHandler("stats", stats_menu))
 
-    # callbacks
+    # stats callbacks
+    app.add_handler(CallbackQueryHandler(stats_deal_callback, pattern=r"^statsdeal:"))
+    app.add_handler(CallbackQueryHandler(stats_callback, pattern=r"^stats:"))
+
+    # flow callbacks
     app.add_handler(CallbackQueryHandler(deal_handler, pattern=r"^deal_"))
     app.add_handler(CallbackQueryHandler(property_handler, pattern=r"^prop_"))
     app.add_handler(CallbackQueryHandler(buy_property_handler, pattern=r"^buyprop_"))
@@ -1012,8 +1031,9 @@ def main():
     app.add_handler(CallbackQueryHandler(view_handler, pattern=r"^view_"))
     app.add_handler(CallbackQueryHandler(confirm_handler, pattern=r"^confirm_"))
     app.add_handler(CallbackQueryHandler(terms_handler, pattern=r"^terms_"))
+
+    # group status buttons
     app.add_handler(CallbackQueryHandler(status_change_handler, pattern=r"^status:"))
-    app.add_handler(CallbackQueryHandler(stats_callback, pattern=r"^stats:"))
 
     # messages
     app.add_handler(MessageHandler(filters.CONTACT, contact_handler))
