@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from telegram import (
     Update,
@@ -19,14 +19,14 @@ from telegram.ext import (
     filters
 )
 
-# ================= CONFIG =================
+# ================== CONFIG ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID", "0"))
 
 if not BOT_TOKEN or ADMIN_GROUP_ID == 0:
     raise RuntimeError("BOT_TOKEN або ADMIN_GROUP_ID не задані")
 
-# ================= DB =================
+# ================== DATABASE ==================
 conn = sqlite3.connect("real_estate.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS requests (
 """)
 conn.commit()
 
-# ================= MEMORY =================
+# ================== STATE ==================
 users = {}
 REQUEST_COUNTER = 0
 
@@ -53,7 +53,7 @@ STATUS_MAP = {
     "closed": "🔴 Закрили угоду",
 }
 
-# ================= HELPERS =================
+# ================== HELPERS ==================
 def reset_user(uid):
     users.pop(uid, None)
 
@@ -97,7 +97,7 @@ def build_summary(u, req_id):
         f"👀 Формат огляду: {u['view_format']}"
     )
 
-# ================= START =================
+# ================== START ==================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     reset_user(update.effective_user.id)
     users[update.effective_user.id] = {
@@ -111,7 +111,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text("👋 Що вас цікавить?", reply_markup=kb)
 
-# ================= DEAL =================
+# ================== DEAL ==================
 async def deal_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
@@ -131,7 +131,7 @@ async def deal_handler(update: Update, ctx):
     ])
     await q.message.reply_text("🏡 Тип житла:", reply_markup=kb)
 
-# ================= PROPERTY =================
+# ================== PROPERTY ==================
 async def property_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
@@ -146,7 +146,7 @@ async def property_handler(update: Update, ctx):
         u["step"] = "city"
         await q.message.reply_text("📍 В якому місті шукаєте житло?")
 
-# ================= TEXT FLOW =================
+# ================== TEXT FLOW ==================
 async def text_handler(update: Update, ctx):
     uid = update.effective_user.id
     if uid not in users:
@@ -240,7 +240,7 @@ async def text_handler(update: Update, ctx):
             parse_mode="Markdown"
         )
 
-# ================= CALLBACKS =================
+# ================== CALLBACKS ==================
 async def parking_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
@@ -346,7 +346,7 @@ async def terms_handler(update: Update, ctx):
 
     reset_user(q.from_user.id)
 
-# ================= STATUS =================
+# ================== STATUS ==================
 async def status_handler(update: Update, ctx):
     q = update.callback_query
     await q.answer()
@@ -367,12 +367,11 @@ async def status_handler(update: Update, ctx):
         parse_mode="Markdown"
     )
 
-# ================= MAIN =================
+# ================== MAIN ==================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-
     app.add_handler(CallbackQueryHandler(deal_handler, pattern="^deal:"))
     app.add_handler(CallbackQueryHandler(property_handler, pattern="^prop:"))
     app.add_handler(CallbackQueryHandler(parking_handler, pattern="^park:"))
