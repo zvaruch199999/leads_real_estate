@@ -279,12 +279,6 @@ def build_summary_html(u: dict, req_id: int, status_key: str) -> str:
         f"4️⃣ 🗺 <b>Район:</b> {safe_html(u.get('district','—'))}\n"
         f"5️⃣ 👥 <b>Для кого:</b> {safe_html(u.get('for_whom','—'))}\n"
         f"6️⃣ 💼 <b>Діяльність:</b> {safe_html(u.get('job','—'))}\n"
-        f"👥 <b>Кількість осіб:</b> {safe_html(u.get('people_count','—'))}\n"
-f"📄 <b>Документи:</b> {safe_html(u.get('slovakia_docs','—'))}\n"
-f"🇸🇰 <b>В Словаччині:</b> {safe_html(u.get('slovakia_time','—'))}\n"
-f"🗣 <b>Мова:</b> {safe_html(u.get('language_owner','—'))}\n"
-f"📝 <b>Прописка:</b> {safe_html(u.get('registration','—'))}\n"
-f"📧 <b>Email:</b> {safe_html(u.get('email','—'))}\n"
         f"7️⃣ 🧒 <b>Діти:</b> {safe_html(u.get('children','—'))}\n"
         f"8️⃣ 🐾 <b>Тваринки:</b> {safe_html(u.get('pets','—'))}\n"
         f"9️⃣ 🚗 <b>Паркування:</b> {safe_html(u.get('parking','—'))}\n"
@@ -820,52 +814,12 @@ async def text_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("5️⃣ 💼 Чим ви займаєтесь? (діяльність):")
         return
 
-   if step == "job":
-    u["job"] = t
-    u["step"] = "people_count"
-
-    await update.message.reply_text(
-        "👥 Скільки осіб буде проживати в житлі?"
-    )
-    return
+    if step == "job":
+        u["job"] = t
+        u["step"] = "children"
         await update.message.reply_text("6️⃣ 🧒 Чи маєте дітей? Якщо так — вік та стать. Якщо ні — «Ні».")
         return
-if step == "people_count":
-    u["people_count"] = t
-    u["step"] = "slovakia_docs"
 
-    await update.message.reply_text(
-        "📄 Які документи маєте в Словаччині?"
-    )
-    return
-
-if step == "slovakia_docs":
-    u["slovakia_docs"] = t
-    u["step"] = "slovakia_time"
-
-    await update.message.reply_text(
-        "🇸🇰 Як довго проживаєте в Словаччині?"
-    )
-    return
-
-if step == "slovakia_time":
-    u["slovakia_time"] = t
-    u["step"] = "language_owner"
-
-    await update.message.reply_text(
-        "🗣 Якою мовою можете спілкуватися з власником після підписання договору?"
-    )
-    return
-
-if step == "language_owner":
-    u["language_owner"] = t
-    u["step"] = "children"
-
-    await update.message.reply_text(
-        "🧒 Чи маєте дітей? Якщо так — вік та стать. Якщо ні — Ні."
-    )
-    return
-    
     if step == "children":
         u["children"] = t
         u["step"] = "pets"
@@ -873,30 +827,17 @@ if step == "language_owner":
         return
 
     if step == "pets":
-    u["pets"] = t
-    u["step"] = "registration"
-
-    await update.message.reply_text(
-        "📝 Чи потрібна прописка?"
-    )
-    return
-       if step == "registration":
-    u["registration"] = t
-    u["step"] = "parking"
-
-    kb = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("Так", callback_data="park_yes")],
-            [InlineKeyboardButton("Ні", callback_data="park_no")],
-            [InlineKeyboardButton("Пізніше", callback_data="park_later")],
-        ]
-    )
-
-    await update.message.reply_text(
-        "🚗 Чи потрібне паркування?",
-        reply_markup=kb
-    )
-    return
+        u["pets"] = t
+        u["step"] = "parking"
+        kb = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("Так", callback_data="park_yes")],
+                [InlineKeyboardButton("Ні", callback_data="park_no")],
+                [InlineKeyboardButton("Пізніше", callback_data="park_later")],
+            ]
+        )
+        await update.message.reply_text("9️⃣ 🚗 Чи потрібне паркування?", reply_markup=kb)
+        return
 
     if step == "move_in":
         u["move_in"] = t
@@ -949,24 +890,8 @@ if step == "language_owner":
                 "⚠️ Не схоже на номер.\nВведіть у форматі +421901234567 або натисніть кнопку «Поділитись контактом»."
             )
             return
-u["phone"] = normalize_phone(t)
-u["step"] = "email"
-
-await update.message.reply_text(
-    "📧 Вкажіть email або напишіть Ні"
-)
-return
-
-if step == "email":
-    u["email"] = t
-    u["step"] = "name"
-
-    await update.message.reply_text(
-        "👤 Як до вас можемо звертатись? (Імʼя та прізвище)"
-    )
-    return
-
-u["step"] = "name"
+        u["phone"] = normalize_phone(t)
+        u["step"] = "name"
         await update.message.reply_text("👤 Як до вас можемо звертатись? (Імʼя/Прізвище)", reply_markup=ReplyKeyboardRemove())
         return
 
